@@ -3,78 +3,93 @@
 
 import React from "react";
 import { useBinanceLive } from "@/hooks/useBinanceLive";
-import { calculateRSI, calculateEMA, calculateMACD } from "@/lib/ta";
+// If you exported Row type from the hook, you can import it for stronger typing:
+// import type { Row } from "@/hooks/useBinanceLive";
 
-interface CryptoData {
-  symbol: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  prices: number[]; // Needed for indicators
-}
+type Timeframe = "15m" | "1h" | "4h" | "1d";
 
-interface CryptoTableProps {
-  symbols: string[];
-  interval: string;
-}
+type Props = {
+  timeframe: Timeframe;
+  title?: string;
+  /** optional knobs kept for compatibility (not required by the live hook) */
+  limit?: number;
+  pollInterval?: number;
+};
 
-const CryptoTable: React.FC<CryptoTableProps> = ({ symbols, interval }) => {
-  const marketData = useBinanceLive(symbols, interval);
+const fmt = (v: number | null | undefined, d = 4) =>
+  typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "-";
 
-  const tableData = marketData.map((data: CryptoData) => {
-    const rsi = calculateRSI(data.prices);
-    const ema12 = calculateEMA(data.prices, 12);
-    const ema26 = calculateEMA(data.prices, 26);
-    const { macd, signal } = calculateMACD(data.prices);
-
-    return {
-      ...data,
-      rsi: rsi ? rsi.toFixed(2) : "-",
-      ema12: ema12 ? ema12.toFixed(2) : "-",
-      ema26: ema26 ? ema26.toFixed(2) : "-",
-      macd: macd ? macd.toFixed(2) : "-",
-      signal: signal ? signal.toFixed(2) : "-"
-    };
-  });
+const CryptoTable: React.FC<Props> = ({ timeframe, title, limit, pollInterval }) => {
+  // live rows (open/high/low/close/volume + rsi14, ema12/26/50/100/200, macd/signal/hist)
+  const { rows } = useBinanceLive(timeframe);
 
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full table-auto border-collapse border border-gray-700">
+    <div className="p-4 overflow-x-auto">
+      <h2 className="text-xl font-semibold mb-3">
+        {title ?? "CRYPTO"} • Timeframe: {timeframe}
+      </h2>
+
+      <table className="w-full table-auto border-collapse rounded-lg shadow-md">
         <thead>
-          <tr className="bg-gray-800 text-white">
-            <th className="border border-gray-700 px-4 py-2">Symbol</th>
-            <th className="border border-gray-700 px-4 py-2">Open</th>
-            <th className="border border-gray-700 px-4 py-2">High</th>
-            <th className="border border-gray-700 px-4 py-2">Low</th>
-            <th className="border border-gray-700 px-4 py-2">Close</th>
-            <th className="border border-gray-700 px-4 py-2">RSI</th>
-            <th className="border border-gray-700 px-4 py-2">EMA12</th>
-            <th className="border border-gray-700 px-4 py-2">EMA26</th>
-            <th className="border border-gray-700 px-4 py-2">MACD</th>
-            <th className="border border-gray-700 px-4 py-2">Signal</th>
+          <tr className="bg-gray-800 text-white text-xs">
+            <th className="p-2 text-left">Symbol</th>
+            <th className="p-2">Open</th>
+            <th className="p-2">High</th>
+            <th className="p-2">Low</th>
+            <th className="p-2">Close</th>
+            <th className="p-2">RSI(14)</th>
+            <th className="p-2">EMA12</th>
+            <th className="p-2">EMA26</th>
+            <th className="p-2">MACD</th>
+            <th className="p-2">Signal</th>
+            <th className="p-2">Hist</th>
+            <th className="p-2">EMA50</th>
+            <th className="p-2">EMA100</th>
+            <th className="p-2">EMA200</th>
+            <th className="p-2">Volume</th>
           </tr>
         </thead>
+
         <tbody>
-          {tableData.map((row, idx) => (
+          {rows.map((row) => (
             <tr
-              key={idx}
-              className="text-center hover:bg-gray-700 transition-colors"
+              key={`${timeframe}-${row.symbol}`}
+              className="text-xs text-center border-b hover:bg-gray-50"
             >
-              <td className="border border-gray-700 px-4 py-2">{row.symbol}</td>
-              <td className="border border-gray-700 px-4 py-2">{row.open}</td>
-              <td className="border border-gray-700 px-4 py-2">{row.high}</td>
-              <td className="border border-gray-700 px-4 py-2">{row.low}</td>
-              <td className="border border-gray-700 px-4 py-2">{row.close}</td>
-              <td className="border border-gray-700 px-4 py-2">{row.rsi}</td>
-              <td className="border border-gray-700 px-4 py-2">{row.ema12}</td>
-              <td className="border border-gray-700 px-4 py-2">{row.ema26}</td>
-              <td className="border border-gray-700 px-4 py-2">{row.macd}</td>
-              <td className="border border-gray-700 px-4 py-2">{row.signal}</td>
+              <td className="p-2 text-left font-semibold">{row.symbol}</td>
+              <td className="p-2">{fmt(row.open)}</td>
+              <td className="p-2">{fmt(row.high)}</td>
+              <td className="p-2">{fmt(row.low)}</td>
+              <td className="p-2">{fmt(row.close)}</td>
+
+              <td className="p-2">{fmt(row.rsi14, 2)}</td>
+
+              <td className="p-2">{fmt(row.ema12)}</td>
+              <td className="p-2">{fmt(row.ema26)}</td>
+
+              <td className="p-2">{fmt(row.macd)}</td>
+              <td className="p-2">{fmt(row.macdSignal)}</td>
+              <td className="p-2">{fmt(row.macdHist)}</td>
+
+              <td className="p-2">{fmt(row.ema50)}</td>
+              <td className="p-2">{fmt(row.ema100)}</td>
+              <td className="p-2">{fmt(row.ema200)}</td>
+
+              <td className="p-2">
+                {typeof row.volume === "number" && Number.isFinite(row.volume)
+                  ? (row.volume / 1e6).toFixed(2) + "M"
+                  : "-"}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+
+      {rows.length === 0 && (
+        <div className="text-center text-sm text-gray-500 mt-4">
+          Loading {timeframe}… seeding candles & connecting WS
+        </div>
+      )}
     </div>
   );
 };
