@@ -1,94 +1,93 @@
-// components/CryptoTable.tsx
 "use client";
 
-import React from "react";
-import { useBinanceLive } from "@/hooks/useBinanceLive";
-// If you exported Row type from the hook, you can import it for stronger typing:
-// import type { Row } from "@/hooks/useBinanceLive";
+import React, { useEffect, useState } from "react";
 
-type Timeframe = "15m" | "1h" | "4h" | "1d";
+interface CryptoData {
+  symbol: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  rsi: number;
+  macd: number;
+  ema12: number;
+  ema26: number;
+  ema50: number;
+  ema100: number;
+  ema200: number;
+}
 
-type Props = {
-  timeframe: Timeframe;
-  title?: string;
-  /** optional knobs kept for compatibility (not required by the live hook) */
-  limit?: number;
-  pollInterval?: number;
-};
+const CryptoTable: React.FC = () => {
+  const [data, setData] = useState<CryptoData[]>([]);
+  const [loading, setLoading] = useState(true);
 
-const fmt = (v: number | null | undefined, d = 4) =>
-  typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "-";
+  // Fetch all USDT pairs with OHLCV + Indicators
+  const fetchData = async () => {
+    try {
+      const res = await fetch("/api/binance-data");
+      if (!res.ok) throw new Error("Failed to fetch");
+      const json = await res.json();
+      setData(json);
+    } catch (err) {
+      console.error("Error fetching Binance data:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-const CryptoTable: React.FC<Props> = ({ timeframe, title, limit, pollInterval }) => {
-  // live rows (open/high/low/close/volume + rsi14, ema12/26/50/100/200, macd/signal/hist)
-  const { rows } = useBinanceLive(timeframe);
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 60000); // refresh every 60s
+    return () => clearInterval(interval);
+  }, []);
 
   return (
-    <div className="p-4 overflow-x-auto">
-      <h2 className="text-xl font-semibold mb-3">
-        {title ?? "CRYPTO"} • Timeframe: {timeframe}
-      </h2>
-
-      <table className="w-full table-auto border-collapse rounded-lg shadow-md">
-        <thead>
-          <tr className="bg-gray-800 text-white text-xs">
-            <th className="p-2 text-left">Symbol</th>
-            <th className="p-2">Open</th>
-            <th className="p-2">High</th>
-            <th className="p-2">Low</th>
-            <th className="p-2">Close</th>
-            <th className="p-2">RSI(14)</th>
-            <th className="p-2">EMA12</th>
-            <th className="p-2">EMA26</th>
-            <th className="p-2">MACD</th>
-            <th className="p-2">Signal</th>
-            <th className="p-2">Hist</th>
-            <th className="p-2">EMA50</th>
-            <th className="p-2">EMA100</th>
-            <th className="p-2">EMA200</th>
-            <th className="p-2">Volume</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {rows.map((row) => (
-            <tr
-              key={`${timeframe}-${row.symbol}`}
-              className="text-xs text-center border-b hover:bg-gray-50"
-            >
-              <td className="p-2 text-left font-semibold">{row.symbol}</td>
-              <td className="p-2">{fmt(row.open)}</td>
-              <td className="p-2">{fmt(row.high)}</td>
-              <td className="p-2">{fmt(row.low)}</td>
-              <td className="p-2">{fmt(row.close)}</td>
-
-              <td className="p-2">{fmt(row.rsi14, 2)}</td>
-
-              <td className="p-2">{fmt(row.ema12)}</td>
-              <td className="p-2">{fmt(row.ema26)}</td>
-
-              <td className="p-2">{fmt(row.macd)}</td>
-              <td className="p-2">{fmt(row.macdSignal)}</td>
-              <td className="p-2">{fmt(row.macdHist)}</td>
-
-              <td className="p-2">{fmt(row.ema50)}</td>
-              <td className="p-2">{fmt(row.ema100)}</td>
-              <td className="p-2">{fmt(row.ema200)}</td>
-
-              <td className="p-2">
-                {typeof row.volume === "number" && Number.isFinite(row.volume)
-                  ? (row.volume / 1e6).toFixed(2) + "M"
-                  : "-"}
-              </td>
+    <div className="overflow-x-auto w-full">
+      {loading ? (
+        <p className="text-center py-4">Loading data...</p>
+      ) : (
+        <table className="min-w-full table-auto border border-gray-600">
+          <thead className="bg-gray-900 text-white">
+            <tr>
+              <th className="px-4 py-2">Symbol</th>
+              <th className="px-4 py-2">Open</th>
+              <th className="px-4 py-2">High</th>
+              <th className="px-4 py-2">Low</th>
+              <th className="px-4 py-2">Close</th>
+              <th className="px-4 py-2">Volume</th>
+              <th className="px-4 py-2">RSI</th>
+              <th className="px-4 py-2">MACD</th>
+              <th className="px-4 py-2">EMA12</th>
+              <th className="px-4 py-2">EMA26</th>
+              <th className="px-4 py-2">EMA50</th>
+              <th className="px-4 py-2">EMA100</th>
+              <th className="px-4 py-2">EMA200</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {rows.length === 0 && (
-        <div className="text-center text-sm text-gray-500 mt-4">
-          Loading {timeframe}… seeding candles & connecting WS
-        </div>
+          </thead>
+          <tbody>
+            {data.map((coin, i) => (
+              <tr
+                key={i}
+                className="text-center border-t border-gray-600 hover:bg-gray-800"
+              >
+                <td className="px-4 py-2">{coin.symbol}</td>
+                <td className="px-4 py-2">{coin.open.toFixed(4)}</td>
+                <td className="px-4 py-2">{coin.high.toFixed(4)}</td>
+                <td className="px-4 py-2">{coin.low.toFixed(4)}</td>
+                <td className="px-4 py-2">{coin.close.toFixed(4)}</td>
+                <td className="px-4 py-2">{coin.volume.toFixed(2)}</td>
+                <td className="px-4 py-2">{coin.rsi.toFixed(2)}</td>
+                <td className="px-4 py-2">{coin.macd.toFixed(2)}</td>
+                <td className="px-4 py-2">{coin.ema12.toFixed(4)}</td>
+                <td className="px-4 py-2">{coin.ema26.toFixed(4)}</td>
+                <td className="px-4 py-2">{coin.ema50.toFixed(4)}</td>
+                <td className="px-4 py-2">{coin.ema100.toFixed(4)}</td>
+                <td className="px-4 py-2">{coin.ema200.toFixed(4)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
