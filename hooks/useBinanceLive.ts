@@ -26,12 +26,12 @@ export type Row = {
 };
 
 type PerSymbolState = {
-  closes: number[]; // array of closes (old -> new)
+  closes: number[]; // historical closes oldest->newest
 };
 
 const FAPI = 'https://fapi.binance.com';
-const KLIMIT = 600;     // enough for EMA200 and RSI seed
-const MAX_SYMBOLS = 60; // adjust to taste; higher = heavier on browser
+const KLIMIT_DEFAULT = 600;     // enough for EMA200/RSI seed
+const MAX_SYMBOLS_DEFAULT = 60; // keep UI responsive
 
 const TF_TO_STREAM: Record<TF, string> = {
   '15m': 'kline_15m',
@@ -41,16 +41,20 @@ const TF_TO_STREAM: Record<TF, string> = {
 };
 
 async function fetchTopUsdtPerpSymbols(limit: number): Promise<string[]> {
-  const ex = await fetch(`${FAPI}/fapi/v1/exchangeInfo`).then((r) => r.json());
-  const all: string[] = ex.symbols
+  const exResp = await fetch(`${FAPI}/fapi/v1/exchangeInfo`);
+  const ex = await exResp.json();
+  const all: string[] = (ex.symbols ?? [])
     .filter((s: any) => s.contractType === 'PERPETUAL' && s.quoteAsset === 'USDT' && s.status === 'TRADING')
     .map((s: any) => s.symbol.toLowerCase());
 
   try {
-    const tick24 = await fetch(`${FAPI}/fapi/v1/ticker/24hr`).then((r) => r.json());
+    const t24Resp = await fetch(`${FAPI}/fapi/v1/ticker/24hr`);
+    const t24 = await t24Resp.json();
     const volMap = new Map<string, number>();
-    tick24.forEach((t: any) => {
-      if (typeof t.symbol === 'string' && t.symbol.endsWith('USDT')) volMap.set(t.symbol.toLowerCase(), parseFloat(t.volume));
+    (t24 ?? []).forEach((t: any) => {
+      if (t && typeof t.symbol === 'string' && t.symbol.endsWith('USDT')) {
+        volMap.set(t.symbol.toLowerCase(), parseFloat(t.volume) || 0);
+      }
     });
     return [...all].sort((a, b) => (volMap.get(b) || 0) - (volMap.get(a) || 0)).slice(0, limit);
   } catch {
@@ -58,11 +62,22 @@ async function fetchTopUsdtPerpSymbols(limit: number): Promise<string[]> {
   }
 }
 
-async function fetchKlines(symbol: string, tf: TF, limit = KLIMIT) {
-  const url = `${FAPI}/fapi/v1/klines?symbol=${symbol.toUpperCase()}&interval=${tf}&limit=${limit}`;
-  const data = await fetch(url).then((r) => r.json());
-  // data is array of arrays - convert to typed objects
-  return data.map((k: any[]) => ({
+type Kline = {
+  openTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  closeTime: number;
+};
+
+async function fetchKlines(symbol: string, tf: TF, limit = KLIMIT_DEFAULT): Promise<Kline[]> {
+  const url = `${FAPI}/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=${tf}&limit=${limit}`;
+  const res = await fetch(url);
+  const arr = await res.json();
+  // arr is array of arrays
+  return (arr ?? []).map((k: any[]) => ({
     openTime: k[0],
     open: +k[1],
     high: +k[2],
@@ -74,8 +89,8 @@ async function fetchKlines(symbol: string, tf: TF, limit = KLIMIT) {
 }
 
 export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klimit?: number }) {
-  const klimit = opts?.klimit ?? KLIMIT;
-  const maxSymbols = opts?.maxSymbols ?? MAX_SYMBOLS;
+  const klimit = opts?.klimit ?? KLIMIT_DEFAULT;
+  const maxSymbols = opts?.maxSymbols ?? MAX_SYMBOLS_DEFAULT;
 
   const [rows, setRows] = useState<Row[]>([]);
   const statesRef = useRef<Map<string, PerSymbolState>>(new Map());
@@ -88,39 +103,42 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
 
     (async () => {
       try {
-        // 1) pick top symbols
+        // 1) choose top symbols
         const symbols = await fetchTopUsdtPerpSymbols(maxSymbols);
         if (cancelled) return;
 
-        // 2) fetch historical klines for each symbol (parallel)
+        // 2) load historical klines (parallel)
         const klinesAll = await Promise.all(
           symbols.map(async (s) => {
             try {
               const ks = await fetchKlines(s, timeframe, klimit);
               return { symbol: s.toUpperCase(), ks };
-            } catch (e) {
-              return { symbol: s.toUpperCase(), ks: [] as any[] };
+            } catch (err) {
+              return { symbol: s.toUpperCase(), ks: [] as Kline[] };
             }
           })
         );
         if (cancelled) return;
 
-        // 3) build initial states + rows
+        // 3) seed states and initial rows
         const initialRows: Row[] = [];
         const states = new Map<string, PerSymbolState>();
+
         for (const item of klinesAll) {
-          const { symbol, ks } = item;
+          const symbol = item.symbol;
+          const ks = item.ks;
           if (!ks || ks.length === 0) continue;
-          const closes = ks.map((k) => k.close);
+
+          const closes: number[] = ks.map((k: Kline) => k.close);
           states.set(symbol, { closes: [...closes] });
 
           const last = ks[ks.length - 1];
-          const rsi = lastRSI(closes, 14);
-          const ema12 = lastEMA(closes, 12);
-          const ema26 = lastEMA(closes, 26);
-          const ema50 = lastEMA(closes, 50);
-          const ema100 = lastEMA(closes, 100);
-          const ema200 = lastEMA(closes, 200);
+          const rsiVal = lastRSI(closes, 14);
+          const ema12Val = lastEMA(closes, 12);
+          const ema26Val = lastEMA(closes, 26);
+          const ema50Val = lastEMA(closes, 50);
+          const ema100Val = lastEMA(closes, 100);
+          const ema200Val = lastEMA(closes, 200);
           const macdVals = lastMACD(closes, 12, 26, 9);
 
           initialRows.push({
@@ -130,38 +148,34 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
             low: last.low,
             close: last.close,
             volume: last.volume,
-            rsi14: rsi,
+            rsi14: rsiVal,
             macd: macdVals.macd,
             macdSignal: macdVals.signal,
             macdHist: macdVals.hist,
-            ema12,
-            ema26,
-            ema50,
-            ema100,
-            ema200,
+            ema12: ema12Val,
+            ema26: ema26Val,
+            ema50: ema50Val,
+            ema100: ema100Val,
+            ema200: ema200Val,
             ts: Date.now(),
           });
         }
 
         if (cancelled) return;
         statesRef.current = states;
-        // sort alphabetically for stable UI
         initialRows.sort((a, b) => a.symbol.localeCompare(b.symbol));
         setRows(initialRows);
 
-        // 4) open combined kline WS for this timeframe
-        // build streams - warning: many streams make long URL; MAX_SYMBOLS keeps this reasonable
+        // 4) open combined kline WebSocket for timeframe
         const streamName = TF_TO_STREAM[timeframe];
-        const streams = Array.from(states.keys())
-          .map((s) => `${s.toLowerCase()}@${streamName}`)
-          .join('/');
+        // use only symbols we have states for (some may have been skipped)
+        const streamSymbols = Array.from(states.keys()).map((s) => s.toLowerCase());
+        if (streamSymbols.length === 0) return;
+
+        const streams = streamSymbols.map((s) => `${s}@${streamName}`).join('/');
         const wsUrl = `wss://fstream.binance.com/stream?streams=${streams}`;
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
-
-        ws.onopen = () => {
-          // console.log('WS open', timeframe);
-        };
 
         ws.onmessage = (ev: MessageEvent) => {
           try {
@@ -179,8 +193,7 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
             const st = statesRef.current.get(symbol);
             if (!st) return;
 
-            // always update live price
-            const livePartial: Partial<Row> = {
+            const partial: Partial<Row> = {
               symbol,
               open,
               high,
@@ -191,11 +204,10 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
             };
 
             if (isFinal) {
-              // append closed candle and compute indicators
               st.closes.push(close);
               if (st.closes.length > klimit) st.closes.shift();
 
-              // compute fresh indicators (fast, robust)
+              // compute indicators from st.closes
               const rsiVal = lastRSI(st.closes, 14);
               const ema12Val = lastEMA(st.closes, 12);
               const ema26Val = lastEMA(st.closes, 26);
@@ -204,19 +216,19 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
               const ema200Val = lastEMA(st.closes, 200);
               const macdVals = lastMACD(st.closes, 12, 26, 9);
 
-              livePartial.rsi14 = rsiVal;
-              livePartial.ema12 = ema12Val;
-              livePartial.ema26 = ema26Val;
-              livePartial.ema50 = ema50Val;
-              livePartial.ema100 = ema100Val;
-              livePartial.ema200 = ema200Val;
-              livePartial.macd = macdVals.macd;
-              livePartial.macdSignal = macdVals.signal;
-              livePartial.macdHist = macdVals.hist;
+              partial.rsi14 = rsiVal;
+              partial.macd = macdVals.macd;
+              partial.macdSignal = macdVals.signal;
+              partial.macdHist = macdVals.hist;
+              partial.ema12 = ema12Val;
+              partial.ema26 = ema26Val;
+              partial.ema50 = ema50Val;
+              partial.ema100 = ema100Val;
+              partial.ema200 = ema200Val;
             }
 
             // batch updates
-            batchRef.current[symbol] = { ...(batchRef.current[symbol] || {}), ...livePartial };
+            batchRef.current[symbol] = { ...(batchRef.current[symbol] || {}), ...partial };
             if (!scheduledRef.current) {
               scheduledRef.current = true;
               requestAnimationFrame(() => {
@@ -226,13 +238,13 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
 
                 setRows((prev) => {
                   if (prev.length === 0) return prev;
-                  const indexMap = new Map(prev.map((r, i) => [r.symbol, i]));
+                  const idxMap = new Map(prev.map((r, i) => [r.symbol, i]));
                   const next = [...prev];
                   for (const [sym, u] of Object.entries(updates)) {
-                    const idx = indexMap.get(sym);
-                    if (idx == null) continue;
-                    const base = next[idx];
-                    next[idx] = {
+                    const i = idxMap.get(sym);
+                    if (i == null) continue;
+                    const base = next[i];
+                    next[i] = {
                       ...base,
                       open: u.open ?? base.open,
                       high: u.high ?? base.high,
@@ -240,14 +252,14 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
                       close: u.close ?? base.close,
                       volume: u.volume ?? base.volume,
                       rsi14: u.rsi14 ?? base.rsi14,
+                      macd: u.macd ?? base.macd,
+                      macdSignal: u.macdSignal ?? base.macdSignal,
+                      macdHist: u.macdHist ?? base.macdHist,
                       ema12: u.ema12 ?? base.ema12,
                       ema26: u.ema26 ?? base.ema26,
                       ema50: u.ema50 ?? base.ema50,
                       ema100: u.ema100 ?? base.ema100,
                       ema200: u.ema200 ?? base.ema200,
-                      macd: u.macd ?? base.macd,
-                      macdSignal: u.macdSignal ?? base.macdSignal,
-                      macdHist: u.macdHist ?? base.macdHist,
                       ts: u.ts ?? base.ts,
                     };
                   }
@@ -255,21 +267,17 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
                 });
               });
             }
-          } catch (err) {
-            // swallow per-message parsing errors
-            // console.warn('WS msg parse error', err);
+          } catch {
+            // ignore parse errors
           }
         };
 
-        ws.onerror = (e) => {
-          // console.warn('WS error', e);
+        ws.onerror = () => {
+          // ignore or log if desired
         };
 
-        ws.onclose = () => {
-          // console.warn('WS closed', timeframe);
-        };
-      } catch (err) {
-        // console.error('useBinanceLive init error', err);
+      } catch {
+        // initialization error
       }
     })();
 
