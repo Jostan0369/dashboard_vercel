@@ -2,25 +2,36 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { seedEMA, nextEMA, seedMACD, nextMACD, seedRSI, nextRSI, EMAState, MACDState, RSIState } from '@/lib/ta';
+import { lastEMA, lastRSI, lastMACD } from '@/lib/ta';
 
 export type TF = '15m' | '1h' | '4h' | '1d';
 
 export type Row = {
   symbol: string;
-  open: number; high: number; low: number; close: number; volume: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
   rsi14: number | null;
-  ema12: number | null; ema26: number | null; ema50: number | null; ema100: number | null; ema200: number | null;
-  macd: number | null; macdSignal: number | null; macdHist: number | null;
+  macd: number | null;
+  macdSignal: number | null;
+  macdHist: number | null;
+  ema12: number | null;
+  ema26: number | null;
+  ema50: number | null;
+  ema100: number | null;
+  ema200: number | null;
   ts: number;
 };
 
 type PerSymbolState = {
-  closes: number[];
-  ema50: EMAState; ema100: EMAState; ema200: EMAState;
-  macd: MACDState;
-  rsi: RSIState;
+  closes: number[]; // array of closes (old -> new)
 };
+
+const FAPI = 'https://fapi.binance.com';
+const KLIMIT = 600;     // enough for EMA200 and RSI seed
+const MAX_SYMBOLS = 60; // adjust to taste; higher = heavier on browser
 
 const TF_TO_STREAM: Record<TF, string> = {
   '15m': 'kline_15m',
@@ -29,229 +40,244 @@ const TF_TO_STREAM: Record<TF, string> = {
   '1d': 'kline_1d',
 };
 
-const KLIMIT = 600;           // enough for accurate EMA200/RSI seed
-const MAX_SYMBOLS = 60;       // keep UI snappy; raise if your device can handle more
-const FAPI = 'https://fapi.binance.com';
-
-// -------- helpers --------
-async function fetchUsdtPerpSymbols(): Promise<string[]> {
-  const ex = await fetch(`${FAPI}/fapi/v1/exchangeInfo`).then(r => r.json());
-  const syms: string[] = ex.symbols
+async function fetchTopUsdtPerpSymbols(limit: number): Promise<string[]> {
+  const ex = await fetch(`${FAPI}/fapi/v1/exchangeInfo`).then((r) => r.json());
+  const all: string[] = ex.symbols
     .filter((s: any) => s.contractType === 'PERPETUAL' && s.quoteAsset === 'USDT' && s.status === 'TRADING')
     .map((s: any) => s.symbol.toLowerCase());
 
-  // Rank by 24h volume to pick most active first (optional but useful)
   try {
-    const t24 = await fetch(`${FAPI}/fapi/v1/ticker/24hr`).then(r => r.json());
-    const vol = new Map<string, number>();
-    t24.forEach((t: any) => {
-      if (t.symbol.endsWith('USDT')) vol.set(t.symbol.toLowerCase(), parseFloat(t.volume));
+    const tick24 = await fetch(`${FAPI}/fapi/v1/ticker/24hr`).then((r) => r.json());
+    const volMap = new Map<string, number>();
+    tick24.forEach((t: any) => {
+      if (typeof t.symbol === 'string' && t.symbol.endsWith('USDT')) volMap.set(t.symbol.toLowerCase(), parseFloat(t.volume));
     });
-    return [...syms].sort((a, b) => (vol.get(b) || 0) - (vol.get(a) || 0)).slice(0, MAX_SYMBOLS);
+    return [...all].sort((a, b) => (volMap.get(b) || 0) - (volMap.get(a) || 0)).slice(0, limit);
   } catch {
-    return syms.slice(0, MAX_SYMBOLS);
+    return all.slice(0, limit);
   }
 }
 
 async function fetchKlines(symbol: string, tf: TF, limit = KLIMIT) {
   const url = `${FAPI}/fapi/v1/klines?symbol=${symbol.toUpperCase()}&interval=${tf}&limit=${limit}`;
-  const arr = await fetch(url).then(r => r.json());
-  return arr.map((k: any[]) => ({
-    openTime: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5], closeTime: k[6],
+  const data = await fetch(url).then((r) => r.json());
+  // data is array of arrays - convert to typed objects
+  return data.map((k: any[]) => ({
+    openTime: k[0],
+    open: +k[1],
+    high: +k[2],
+    low: +k[3],
+    close: +k[4],
+    volume: +k[5],
+    closeTime: k[6],
   }));
 }
 
-export function useBinanceLive(timeframe: TF) {
+export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klimit?: number }) {
+  const klimit = opts?.klimit ?? KLIMIT;
+  const maxSymbols = opts?.maxSymbols ?? MAX_SYMBOLS;
+
   const [rows, setRows] = useState<Row[]>([]);
   const statesRef = useRef<Map<string, PerSymbolState>>(new Map());
   const wsRef = useRef<WebSocket | null>(null);
-  const batchRef = useRef<Record<string, Row>>({});
-  const scheduledRef = useRef<boolean>(false);
+  const batchRef = useRef<Record<string, Partial<Row>>>({});
+  const scheduledRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      // 1) pick symbols
-      const symbols = await fetchUsdtPerpSymbols();
-      if (cancelled) return;
+      try {
+        // 1) pick top symbols
+        const symbols = await fetchTopUsdtPerpSymbols(maxSymbols);
+        if (cancelled) return;
 
-      // 2) seed each symbol with historical klines and build indicator states
-      const seededRows: Row[] = [];
-      const stateMap = new Map<string, PerSymbolState>();
+        // 2) fetch historical klines for each symbol (parallel)
+        const klinesAll = await Promise.all(
+          symbols.map(async (s) => {
+            try {
+              const ks = await fetchKlines(s, timeframe, klimit);
+              return { symbol: s.toUpperCase(), ks };
+            } catch (e) {
+              return { symbol: s.toUpperCase(), ks: [] as any[] };
+            }
+          })
+        );
+        if (cancelled) return;
 
-      const klinesAll = await Promise.all(
-        symbols.map(async (s) => {
-          const ks = await fetchKlines(s, timeframe, KLIMIT);
-          return { s, ks };
-        })
-      );
-      if (cancelled) return;
+        // 3) build initial states + rows
+        const initialRows: Row[] = [];
+        const states = new Map<string, PerSymbolState>();
+        for (const item of klinesAll) {
+          const { symbol, ks } = item;
+          if (!ks || ks.length === 0) continue;
+          const closes = ks.map((k) => k.close);
+          states.set(symbol, { closes: [...closes] });
 
-      for (const { s, ks } of klinesAll) {
-        if (!ks.length) continue;
-        const closes = ks.map((x) => x.close);
+          const last = ks[ks.length - 1];
+          const rsi = lastRSI(closes, 14);
+          const ema12 = lastEMA(closes, 12);
+          const ema26 = lastEMA(closes, 26);
+          const ema50 = lastEMA(closes, 50);
+          const ema100 = lastEMA(closes, 100);
+          const ema200 = lastEMA(closes, 200);
+          const macdVals = lastMACD(closes, 12, 26, 9);
 
-        const ema50 = seedEMA(50, closes);
-        const ema100 = seedEMA(100, closes);
-        const ema200 = seedEMA(200, closes);
-        const macd = seedMACD(closes, 12, 26, 9);
-        const rsi = seedRSI(closes, 14);
-
-        const last = ks[ks.length - 1];
-        const symbolU = s.toUpperCase();
-
-        stateMap.set(symbolU, { closes: [...closes], ema50, ema100, ema200, macd, rsi });
-
-        seededRows.push({
-          symbol: symbolU,
-          open: last.open,
-          high: last.high,
-          low: last.low,
-          close: last.close,
-          volume: last.volume,
-          rsi14: (() => {
-            if (rsi.avgGain == null || rsi.avgLoss == null) return null;
-            if (rsi.avgLoss === 0) return 100;
-            const rs = rsi.avgGain / rsi.avgLoss;
-            return 100 - 100 / (1 + rs);
-          })(),
-          ema12: macd.emaFast.value,
-          ema26: macd.emaSlow.value,
-          ema50: ema50.value,
-          ema100: ema100.value,
-          ema200: ema200.value,
-          macd: macd.macd,
-          macdSignal: macd.signal.value,
-          macdHist: macd.macd != null && macd.signal.value != null ? macd.macd - macd.signal.value : null,
-          ts: Date.now(),
-        });
-      }
-
-      if (cancelled) return;
-      statesRef.current = stateMap;
-      setRows(seededRows.sort((a, b) => a.symbol.localeCompare(b.symbol)));
-
-      // 3) open combined WS for this timeframe
-      const stream = TF_TO_STREAM[timeframe];
-      const streams = symbols.map((s) => `${s}@${stream}`).join('/');
-      const url = `wss://fstream.binance.com/stream?streams=${streams}`;
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onmessage = (ev) => {
-        const msg = JSON.parse(ev.data);
-        const k = msg?.data?.k;
-        if (!k) return;
-
-        const symbol = k.s as string; // UPPERCASE
-        const isFinal = !!k.x;
-        const open = +k.o, high = +k.h, low = +k.l, close = +k.c, volume = +k.v;
-
-        const map = statesRef.current;
-        const st = map.get(symbol);
-        if (!st) return;
-
-        // Update live OHLCV immediately
-        const partial: Row = {
-          symbol,
-          open, high, low, close, volume,
-          rsi14: null,
-          ema12: null, ema26: null, ema50: null, ema100: null, ema200: null,
-          macd: null, macdSignal: null, macdHist: null,
-          ts: Date.now(),
-        };
-
-        // On candle close, advance indicators incrementally
-        if (isFinal) {
-          st.closes.push(close);
-          if (st.closes.length > KLIMIT) st.closes.shift();
-
-          // Big EMAs
-          st.ema50 = st.ema50.value == null ? seedEMA(50, st.closes) : nextEMA(st.ema50, close);
-          st.ema100 = st.ema100.value == null ? seedEMA(100, st.closes) : nextEMA(st.ema100, close);
-          st.ema200 = st.ema200.value == null ? seedEMA(200, st.closes) : nextEMA(st.ema200, close);
-
-          // MACD (fast/slow + signal)
-          const m = nextMACD(st.macd, close);
-          st.macd = m.state;
-
-          // RSI
-          const r = nextRSI(st.rsi, close);
-          st.rsi = r.state;
-
-          partial.ema12 = st.macd.emaFast.value;
-          partial.ema26 = st.macd.emaSlow.value;
-          partial.ema50 = st.ema50.value;
-          partial.ema100 = st.ema100.value;
-          partial.ema200 = st.ema200.value;
-          partial.macd = m.macd;
-          partial.macdSignal = m.signal;
-          partial.macdHist = m.hist;
-          partial.rsi14 = r.rsi;
-        }
-
-        // Batch UI updates to avoid re-render storms
-        batchRef.current[symbol] = partial;
-        if (!scheduledRef.current) {
-          scheduledRef.current = true;
-          requestAnimationFrame(() => {
-            const updates = batchRef.current;
-            batchRef.current = {};
-            scheduledRef.current = false;
-
-            setRows((prev) => {
-              if (prev.length === 0) return prev;
-              const idxMap = new Map(prev.map((r, i) => [r.symbol, i]));
-              const next = [...prev];
-              for (const [sym, u] of Object.entries(updates)) {
-                const i = idxMap.get(sym);
-                if (i == null) continue;
-                const base = next[i];
-                next[i] = {
-                  ...base,
-                  open: u.open ?? base.open,
-                  high: u.high ?? base.high,
-                  low: u.low ?? base.low,
-                  close: u.close ?? base.close,
-                  volume: u.volume ?? base.volume,
-                  rsi14: u.rsi14 ?? base.rsi14,
-                  ema12: u.ema12 ?? base.ema12,
-                  ema26: u.ema26 ?? base.ema26,
-                  ema50: u.ema50 ?? base.ema50,
-                  ema100: u.ema100 ?? base.ema100,
-                  ema200: u.ema200 ?? base.ema200,
-                  macd: u.macd ?? base.macd,
-                  macdSignal: u.macdSignal ?? base.macdSignal,
-                  macdHist: u.macdHist ?? base.macdHist,
-                  ts: u.ts ?? base.ts,
-                };
-              }
-              return next;
-            });
+          initialRows.push({
+            symbol,
+            open: last.open,
+            high: last.high,
+            low: last.low,
+            close: last.close,
+            volume: last.volume,
+            rsi14: rsi,
+            macd: macdVals.macd,
+            macdSignal: macdVals.signal,
+            macdHist: macdVals.hist,
+            ema12,
+            ema26,
+            ema50,
+            ema100,
+            ema200,
+            ts: Date.now(),
           });
         }
-      };
 
-      ws.onopen = () => {
-        // eslint-disable-next-line no-console
-        console.log(`✅ WS open (${timeframe}) for ${symbols.length} USDT perpetuals`);
-      };
-      ws.onerror = (e) => {
-        // eslint-disable-next-line no-console
-        console.warn('WS error', timeframe, e);
-      };
-      ws.onclose = () => {
-        // eslint-disable-next-line no-console
-        console.warn('WS closed', timeframe);
-      };
+        if (cancelled) return;
+        statesRef.current = states;
+        // sort alphabetically for stable UI
+        initialRows.sort((a, b) => a.symbol.localeCompare(b.symbol));
+        setRows(initialRows);
+
+        // 4) open combined kline WS for this timeframe
+        // build streams - warning: many streams make long URL; MAX_SYMBOLS keeps this reasonable
+        const streamName = TF_TO_STREAM[timeframe];
+        const streams = Array.from(states.keys())
+          .map((s) => `${s.toLowerCase()}@${streamName}`)
+          .join('/');
+        const wsUrl = `wss://fstream.binance.com/stream?streams=${streams}`;
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          // console.log('WS open', timeframe);
+        };
+
+        ws.onmessage = (ev: MessageEvent) => {
+          try {
+            const parsed = JSON.parse(ev.data as string);
+            const k = parsed?.data?.k;
+            if (!k) return;
+            const symbol: string = k.s;
+            const isFinal: boolean = !!k.x;
+            const open = +k.o;
+            const high = +k.h;
+            const low = +k.l;
+            const close = +k.c;
+            const volume = +k.v;
+
+            const st = statesRef.current.get(symbol);
+            if (!st) return;
+
+            // always update live price
+            const livePartial: Partial<Row> = {
+              symbol,
+              open,
+              high,
+              low,
+              close,
+              volume,
+              ts: Date.now(),
+            };
+
+            if (isFinal) {
+              // append closed candle and compute indicators
+              st.closes.push(close);
+              if (st.closes.length > klimit) st.closes.shift();
+
+              // compute fresh indicators (fast, robust)
+              const rsiVal = lastRSI(st.closes, 14);
+              const ema12Val = lastEMA(st.closes, 12);
+              const ema26Val = lastEMA(st.closes, 26);
+              const ema50Val = lastEMA(st.closes, 50);
+              const ema100Val = lastEMA(st.closes, 100);
+              const ema200Val = lastEMA(st.closes, 200);
+              const macdVals = lastMACD(st.closes, 12, 26, 9);
+
+              livePartial.rsi14 = rsiVal;
+              livePartial.ema12 = ema12Val;
+              livePartial.ema26 = ema26Val;
+              livePartial.ema50 = ema50Val;
+              livePartial.ema100 = ema100Val;
+              livePartial.ema200 = ema200Val;
+              livePartial.macd = macdVals.macd;
+              livePartial.macdSignal = macdVals.signal;
+              livePartial.macdHist = macdVals.hist;
+            }
+
+            // batch updates
+            batchRef.current[symbol] = { ...(batchRef.current[symbol] || {}), ...livePartial };
+            if (!scheduledRef.current) {
+              scheduledRef.current = true;
+              requestAnimationFrame(() => {
+                const updates = batchRef.current;
+                batchRef.current = {};
+                scheduledRef.current = false;
+
+                setRows((prev) => {
+                  if (prev.length === 0) return prev;
+                  const indexMap = new Map(prev.map((r, i) => [r.symbol, i]));
+                  const next = [...prev];
+                  for (const [sym, u] of Object.entries(updates)) {
+                    const idx = indexMap.get(sym);
+                    if (idx == null) continue;
+                    const base = next[idx];
+                    next[idx] = {
+                      ...base,
+                      open: u.open ?? base.open,
+                      high: u.high ?? base.high,
+                      low: u.low ?? base.low,
+                      close: u.close ?? base.close,
+                      volume: u.volume ?? base.volume,
+                      rsi14: u.rsi14 ?? base.rsi14,
+                      ema12: u.ema12 ?? base.ema12,
+                      ema26: u.ema26 ?? base.ema26,
+                      ema50: u.ema50 ?? base.ema50,
+                      ema100: u.ema100 ?? base.ema100,
+                      ema200: u.ema200 ?? base.ema200,
+                      macd: u.macd ?? base.macd,
+                      macdSignal: u.macdSignal ?? base.macdSignal,
+                      macdHist: u.macdHist ?? base.macdHist,
+                      ts: u.ts ?? base.ts,
+                    };
+                  }
+                  return next;
+                });
+              });
+            }
+          } catch (err) {
+            // swallow per-message parsing errors
+            // console.warn('WS msg parse error', err);
+          }
+        };
+
+        ws.onerror = (e) => {
+          // console.warn('WS error', e);
+        };
+
+        ws.onclose = () => {
+          // console.warn('WS closed', timeframe);
+        };
+      } catch (err) {
+        // console.error('useBinanceLive init error', err);
+      }
     })();
 
     return () => {
       cancelled = true;
       wsRef.current?.close();
     };
-  }, [timeframe]);
+  }, [timeframe, klimit, maxSymbols]);
 
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => a.symbol.localeCompare(b.symbol));
