@@ -3,7 +3,8 @@ import { lastRSI, lastEMA, lastMACD } from "../lib/ta";
 
 export type TF = "15m" | "1h" | "4h" | "1d";
 
-interface Row {
+// Add 'export' here
+export interface Row { 
   symbol: string;
   open: number;
   high: number;
