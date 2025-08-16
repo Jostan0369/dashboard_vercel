@@ -88,9 +88,11 @@ async function fetchKlines(symbol: string, tf: TF, limit = KLIMIT_DEFAULT): Prom
   }));
 }
 
-export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klimit?: number }) {
-  const klimit = opts?.klimit ?? KLIMIT_DEFAULT;
-  const maxSymbols = opts?.maxSymbols ?? MAX_SYMBOLS_DEFAULT;
+// hooks/useBinanceLive.ts
+export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klimit?: number }) { ... }
+export type TF = '15m' | '1h' | '4h' | '1d';
+export type Row = { symbol: string; open: number; high: number; low: number; close: number; volume: number; rsi14: number|null; macd: number|null; ema12: number|null; ema26: number|null; ema50: number|null; ema100: number|null; ema200: number|null; ts: number; };
+
 
   const [rows, setRows] = useState<Row[]>([]);
   const statesRef = useRef<Map<string, PerSymbolState>>(new Map());
@@ -293,3 +295,4 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
 
   return { rows: sorted };
 }
+
