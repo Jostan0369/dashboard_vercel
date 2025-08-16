@@ -28,8 +28,9 @@ export type Row = {
 type PerSymbolState = { closes: number[] };
 
 const FAPI = 'https://fapi.binance.com';
-const KLIMIT_DEFAULT = 600;
-const MAX_SYMBOLS_DEFAULT = 120;
+const KLIMIT_DEFAULT = 600;      // enough history for EMA200/RSI
+const MAX_SYMBOLS_DEFAULT = 60;  // keep browser & WS stable
+const BATCH_WS_SIZE = 40;        // symbols per websocket (tweakable)
 
 const TF_TO_STREAM: Record<TF, string> = {
   '15m': 'kline_15m',
@@ -49,15 +50,15 @@ type Kline = {
 };
 
 async function fetchTopUsdtPerpSymbols(limit: number): Promise<string[]> {
-  const exRes = await fetch(`${FAPI}/fapi/v1/exchangeInfo`);
-  const ex = await exRes.json();
+  const exResp = await fetch(`${FAPI}/fapi/v1/exchangeInfo`);
+  const ex = await exResp.json();
   const futuresUsdt = (ex.symbols ?? [])
     .filter((s: any) => s.contractType === 'PERPETUAL' && s.quoteAsset === 'USDT' && s.status === 'TRADING')
     .map((s: any) => s.symbol.toLowerCase());
 
   try {
-    const t24Res = await fetch(`${FAPI}/fapi/v1/ticker/24hr`);
-    const t24 = await t24Res.json();
+    const t24Resp = await fetch(`${FAPI}/fapi/v1/ticker/24hr`);
+    const t24 = await t24Resp.json();
     const vol = new Map<string, number>();
     (t24 ?? []).forEach((t: any) => {
       if (t && typeof t.symbol === 'string' && t.symbol.endsWith('USDT')) {
@@ -73,6 +74,7 @@ async function fetchTopUsdtPerpSymbols(limit: number): Promise<string[]> {
 async function fetchKlines(symbol: string, tf: TF, limit = KLIMIT_DEFAULT): Promise<Kline[]> {
   const url = `${FAPI}/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=${tf}&limit=${limit}`;
   const res = await fetch(url);
+  if (!res.ok) return [];
   const arr = await res.json();
   return (arr ?? []).map((k: any[]) => ({
     openTime: k[0],
@@ -85,43 +87,92 @@ async function fetchKlines(symbol: string, tf: TF, limit = KLIMIT_DEFAULT): Prom
   })) as Kline[];
 }
 
-export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klimit?: number }): { rows: Row[] } {
+export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klimit?: number }) {
   const klimit = opts?.klimit ?? KLIMIT_DEFAULT;
   const maxSymbols = opts?.maxSymbols ?? MAX_SYMBOLS_DEFAULT;
 
   const [rows, setRows] = useState<Row[]>([]);
   const statesRef = useRef<Map<string, PerSymbolState>>(new Map());
-  const wsRef = useRef<WebSocket | null>(null);
+  const wsRefs = useRef<WebSocket[]>([]);
   const batchRef = useRef<Record<string, Partial<Row>>>({});
   const scheduledRef = useRef(false);
+
+  // helper to schedule batched UI update
+  function scheduleFlush() {
+    if (scheduledRef.current) return;
+    scheduledRef.current = true;
+    (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb: any) => setTimeout(cb, 16))(
+      () => {
+        const updates = batchRef.current;
+        batchRef.current = {};
+        scheduledRef.current = false;
+        setRows((prev) => {
+          if (!prev.length) return prev;
+          const idx = new Map(prev.map((r, i) => [r.symbol, i]));
+          const next = [...prev];
+          for (const [sym, u] of Object.entries(updates)) {
+            const i = idx.get(sym);
+            if (i == null) continue;
+            const base = next[i];
+            next[i] = {
+              ...base,
+              open   : u.open   ?? base.open,
+              high   : u.high   ?? base.high,
+              low    : u.low    ?? base.low,
+              close  : u.close  ?? base.close,
+              volume : u.volume ?? base.volume,
+              rsi14  : u.rsi14  ?? base.rsi14,
+              macd   : u.macd   ?? base.macd,
+              macdSignal: u.macdSignal ?? base.macdSignal,
+              macdHist  : u.macdHist   ?? base.macdHist,
+              ema12  : u.ema12  ?? base.ema12,
+              ema26  : u.ema26  ?? base.ema26,
+              ema50  : u.ema50  ?? base.ema50,
+              ema100 : u.ema100 ?? base.ema100,
+              ema200 : u.ema200 ?? base.ema200,
+              ts     : u.ts     ?? base.ts,
+            };
+          }
+          return next;
+        });
+      }
+    );
+  }
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const syms = await fetchTopUsdtPerpSymbols(maxSymbols);
-        if (cancelled || syms.length === 0) return;
+        // 1) choose symbols
+        const symbols = await fetchTopUsdtPerpSymbols(maxSymbols);
+        if (cancelled || symbols.length === 0) return;
+        console.info(`Fetched symbols for table: ${symbols.length}`);
 
-        const seeded = await Promise.all(
-          syms.map(async (s) => {
-            try {
-              const ks = await fetchKlines(s, timeframe, klimit);
-              return { symbol: s.toUpperCase(), ks };
-            } catch {
-              return { symbol: s.toUpperCase(), ks: [] as Kline[] };
-            }
-          })
-        );
+        // 2) seed klines in parallel (but in batches to avoid rate limiting)
+        const batches = [];
+        const perBatch = 10; // fetch 10 symbols in parallel per round
+        for (let i = 0; i < symbols.length; i += perBatch) batches.push(symbols.slice(i, i + perBatch));
+
+        const seededResults: { symbol: string; ks: Kline[] }[] = [];
+        for (const batch of batches) {
+          const promises = batch.map(async (s) => {
+            const ks = await fetchKlines(s, timeframe, klimit);
+            return { symbol: s.toUpperCase(), ks };
+          });
+          const res = await Promise.all(promises);
+          seededResults.push(...res);
+        }
         if (cancelled) return;
 
-        const nextRows: Row[] = [];
-        const newStates = new Map<string, PerSymbolState>();
-
-        for (const { symbol, ks } of seeded) {
-          if (!ks.length) continue;
-          const closes: number[] = ks.map((k: Kline) => k.close);
-          newStates.set(symbol, { closes: [...closes] });
+        // 3) prepare initial rows + states
+        const initial: Row[] = [];
+        const states = new Map<string, PerSymbolState>();
+        for (const item of seededResults) {
+          const { symbol, ks } = item;
+          if (!ks || ks.length === 0) continue;
+          const closes = ks.map((k) => k.close);
+          states.set(symbol, { closes: [...closes] });
 
           const last = ks[ks.length - 1];
           const rsi = lastRSI(closes, 14);
@@ -132,7 +183,7 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
           const ema200 = lastEMA(closes, 200);
           const m = lastMACD(closes, 12, 26, 9);
 
-          nextRows.push({
+          initial.push({
             symbol,
             open: last.open,
             high: last.high,
@@ -153,109 +204,118 @@ export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klim
         }
 
         if (cancelled) return;
-        statesRef.current = newStates;
-        nextRows.sort((a, b) => a.symbol.localeCompare(b.symbol));
-        setRows(nextRows);
+        statesRef.current = states;
+        initial.sort((a, b) => a.symbol.localeCompare(b.symbol));
+        setRows(initial);
 
-        // open combined WS for timeframe
-        const stream = TF_TO_STREAM[timeframe];
-        const streamSyms = Array.from(newStates.keys()).map((s) => s.toLowerCase());
-        if (streamSyms.length === 0) return;
-        const streams = streamSyms.map((s) => `${s}@${stream}`).join('/');
-        const wsUrl = `wss://fstream.binance.com/stream?streams=${streams}`;
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
+        // 4) open WS connections in batches to avoid huge URL and WS drops
+        // split stream symbols into smaller groups (BATCH_WS_SIZE)
+        const streamName = TF_TO_STREAM[timeframe];
+        const allStreamSymbols = Array.from(states.keys()).map((s) => s.toLowerCase());
+        const wsBatches: string[][] = [];
+        for (let i = 0; i < allStreamSymbols.length; i += BATCH_WS_SIZE) {
+          wsBatches.push(allStreamSymbols.slice(i, i + BATCH_WS_SIZE));
+        }
 
-        ws.onmessage = (ev: MessageEvent) => {
+        // close existing WS refs if any
+        wsRefs.current.forEach((w) => { try { w.close(); } catch {} });
+        wsRefs.current = [];
+
+        // function to create and wire a ws for a given symbol list
+        const createWsFor = (syms: string[]) => {
+          const streams = syms.map((s) => `${s}@${streamName}`).join('/');
+          const url = `wss://fstream.binance.com/stream?streams=${streams}`;
+          let ws: WebSocket;
           try {
-            const msg = JSON.parse(ev.data as string);
-            const k = msg?.data?.k;
-            if (!k) return;
-
-            const symbol: string = k.s;
-            const isFinal: boolean = !!k.x;
-            const open = +k.o;
-            const high = +k.h;
-            const low = +k.l;
-            const close = +k.c;
-            const volume = +k.v;
-
-            const st = statesRef.current.get(symbol);
-            if (!st) return;
-
-            const partial: Partial<Row> = { symbol, open, high, low, close, volume, ts: Date.now() };
-
-            if (isFinal) {
-              st.closes.push(close);
-              if (st.closes.length > klimit) st.closes.shift();
-
-              partial.rsi14 = lastRSI(st.closes, 14);
-              partial.ema12 = lastEMA(st.closes, 12);
-              partial.ema26 = lastEMA(st.closes, 26);
-              partial.ema50 = lastEMA(st.closes, 50);
-              partial.ema100 = lastEMA(st.closes, 100);
-              partial.ema200 = lastEMA(st.closes, 200);
-              const mm = lastMACD(st.closes, 12, 26, 9);
-              partial.macd = mm.macd;
-              partial.macdSignal = mm.signal;
-              partial.macdHist = mm.hist;
-            }
-
-            batchRef.current[symbol] = { ...(batchRef.current[symbol] || {}), ...partial };
-            if (!scheduledRef.current) {
-              scheduledRef.current = true;
-              (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb: any) => setTimeout(cb, 16))(
-                () => {
-                  const updates = batchRef.current;
-                  batchRef.current = {};
-                  scheduledRef.current = false;
-
-                  setRows((prev) => {
-                    if (prev.length === 0) return prev;
-                    const idxMap = new Map(prev.map((r, i) => [r.symbol, i]));
-                    const next = [...prev];
-                    for (const [sym, u] of Object.entries(updates)) {
-                      const i = idxMap.get(sym);
-                      if (i == null) continue;
-                      const base = next[i];
-                      next[i] = {
-                        ...base,
-                        open   : u.open   ?? base.open,
-                        high   : u.high   ?? base.high,
-                        low    : u.low    ?? base.low,
-                        close  : u.close  ?? base.close,
-                        volume : u.volume ?? base.volume,
-                        rsi14  : u.rsi14  ?? base.rsi14,
-                        macd   : u.macd   ?? base.macd,
-                        macdSignal: u.macdSignal ?? base.macdSignal,
-                        macdHist  : u.macdHist   ?? base.macdHist,
-                        ema12  : u.ema12  ?? base.ema12,
-                        ema26  : u.ema26  ?? base.ema26,
-                        ema50  : u.ema50  ?? base.ema50,
-                        ema100 : u.ema100 ?? base.ema100,
-                        ema200 : u.ema200 ?? base.ema200,
-                        ts     : u.ts     ?? base.ts,
-                      };
-                    }
-                    return next;
-                  });
-                }
-              );
-            }
-          } catch {
-            // ignore parse errors
+            ws = new WebSocket(url);
+          } catch (err) {
+            console.warn('WS construction failed for url length', url.length, err);
+            return null;
           }
+
+          ws.onopen = () => {
+            console.info('WS open for batch size', syms.length);
+          };
+
+          ws.onmessage = (ev: MessageEvent) => {
+            try {
+              const parsed = JSON.parse(ev.data as string);
+              const k = parsed?.data?.k;
+              if (!k) return;
+              const symbol = k.s as string;
+              const isFinal = !!k.x;
+              const open = +k.o;
+              const high = +k.h;
+              const low = +k.l;
+              const close = +k.c;
+              const volume = +k.v;
+
+              const st = statesRef.current.get(symbol);
+              if (!st) return;
+
+              const partial: Partial<Row> = { symbol, open, high, low, close, volume, ts: Date.now() };
+
+              if (isFinal) {
+                st.closes.push(close);
+                if (st.closes.length > klimit) st.closes.shift();
+
+                partial.rsi14 = lastRSI(st.closes, 14);
+                partial.ema12 = lastEMA(st.closes, 12);
+                partial.ema26 = lastEMA(st.closes, 26);
+                partial.ema50 = lastEMA(st.closes, 50);
+                partial.ema100 = lastEMA(st.closes, 100);
+                partial.ema200 = lastEMA(st.closes, 200);
+                const mm = lastMACD(st.closes, 12, 26, 9);
+                partial.macd = mm.macd;
+                partial.macdSignal = mm.signal;
+                partial.macdHist = mm.hist;
+              }
+
+              // batch update
+              batchRef.current[symbol] = { ...(batchRef.current[symbol] || {}), ...partial };
+              scheduleFlush();
+            } catch (err) {
+              // parse or runtime error - don't crash the whole hook
+              // console.warn('WS msg error', err);
+            }
+          };
+
+          ws.onerror = (e) => {
+            console.warn('WS error for batch', e);
+          };
+
+          ws.onclose = (ev) => {
+            console.warn('WS closed for batch', ev && (ev as CloseEvent).code);
+            // try reconnect small delay
+            setTimeout(() => {
+              // only if the hook still active
+              if (!cancelled) {
+                createWsFor(syms);
+              }
+            }, 1500 + Math.random() * 2000);
+          };
+
+          return ws;
         };
 
-        ws.onerror = () => { /* optionally log */ };
-      } catch {
-        // init error - keep UI alive
+        // create all WS connections
+        for (const batch of wsBatches) {
+          const w = createWsFor(batch);
+          if (w) wsRefs.current.push(w);
+        }
+
+        console.info(`Connecting WebSocket for ${allStreamSymbols.length} Futures USDT pairs in ${wsRefs.current.length} connection(s)...`);
+      } catch (err) {
+        console.error('useBinanceLive init error', err);
       }
     })();
 
     return () => {
-      try { wsRef.current?.close(); } catch {}
+      cancelled = true;
+      wsRefs.current.forEach((w) => { try { w.close(); } catch {} });
+      wsRefs.current = [];
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeframe, klimit, maxSymbols]);
 
   const sorted = useMemo(() => [...rows].sort((a, b) => a.symbol.localeCompare(b.symbol)), [rows]);
