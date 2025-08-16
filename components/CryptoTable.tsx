@@ -1,4 +1,3 @@
-// components/CryptoTable.tsx
 'use client';
 
 import React, { useMemo } from 'react';
@@ -8,9 +7,11 @@ export type Timeframe = '15m' | '1h' | '4h' | '1d';
 
 type Props = {
   timeframe: Timeframe;
-  limit?: number;           // max rows to render
+  /** Max number of symbols to render (also used to limit how many pairs we subscribe to) */
+  limit?: number;
+  /** Kept for compatibility with your usage; ignored in WebSocket mode */
+  pollInterval?: number;
   title?: string;
-  // pollInterval?: number; // kept out (WS mode), add if you need polling later
 };
 
 function fmt(x: number | null | undefined, d = 2): string {
@@ -18,17 +19,20 @@ function fmt(x: number | null | undefined, d = 2): string {
   return Number.isFinite(x) ? x.toFixed(d) : '-';
 }
 
-const CryptoTable: React.FC<Props> = ({ timeframe, limit = 120, title }) => {
+const CryptoTable: React.FC<Props> = ({ timeframe, limit = 120, pollInterval, title }) => {
+  // Live Futures USDT data + indicators (seeded with klines so RSI/EMA200 are available immediately)
   const { rows } = useBinanceLive(timeframe as TF, {
-    maxSymbols: limit,  // controls WS streams & seeding load
-    klimit: 600,        // enough for EMA200
+    maxSymbols: limit,  // how many pairs to subscribe to and render
+    klimit: 600,        // enough history for EMA200/RSI14/MACD
   });
 
   const list: Row[] = useMemo(() => rows.slice(0, limit), [rows, limit]);
 
   return (
     <div className="p-4 overflow-x-auto">
-      <h2 className="text-lg font-semibold mb-3">{title ?? 'Crypto Futures USDT'} — {timeframe}</h2>
+      <h2 className="text-lg font-semibold mb-3">
+        {title ?? 'Crypto Futures USDT'} — {timeframe}
+      </h2>
 
       <table className="w-full table-auto border-collapse rounded-lg shadow-md">
         <thead>
@@ -39,6 +43,7 @@ const CryptoTable: React.FC<Props> = ({ timeframe, limit = 120, title }) => {
             <th className="p-2">Low</th>
             <th className="p-2">Close</th>
             <th className="p-2">Volume</th>
+            {/* exact order you requested */}
             <th className="p-2">RSI</th>
             <th className="p-2">MACD</th>
             <th className="p-2">EMA12</th>
@@ -57,6 +62,7 @@ const CryptoTable: React.FC<Props> = ({ timeframe, limit = 120, title }) => {
               <td className="p-2">{fmt(r.low, 4)}</td>
               <td className="p-2">{fmt(r.close, 4)}</td>
               <td className="p-2">{fmt(r.volume, 2)}</td>
+              {/* indicators */}
               <td className="p-2">{fmt(r.rsi14, 2)}</td>
               <td className="p-2">{fmt(r.macd, 4)}</td>
               <td className="p-2">{fmt(r.ema12, 4)}</td>
