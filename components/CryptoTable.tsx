@@ -1,3 +1,4 @@
+// components/CryptoTable.tsx
 'use client';
 
 import React, { useMemo } from 'react';
@@ -7,11 +8,9 @@ export type Timeframe = '15m' | '1h' | '4h' | '1d';
 
 type Props = {
   timeframe: Timeframe;
-  /** max symbols to render (passed to hook as maxSymbols) */
-  limit?: number;
-  /** kept for compatibility; ignored in WS mode */
-  pollInterval?: number;
+  limit?: number;           // max rows to render
   title?: string;
+  // pollInterval?: number; // kept out (WS mode), add if you need polling later
 };
 
 function fmt(x: number | null | undefined, d = 2): string {
@@ -19,26 +18,17 @@ function fmt(x: number | null | undefined, d = 2): string {
   return Number.isFinite(x) ? x.toFixed(d) : '-';
 }
 
-const CryptoTable: React.FC<Props> = ({ timeframe, limit, pollInterval, title }) => {
-  // Map 'limit' to the hook's maxSymbols; default 60 to keep the page fast.
+const CryptoTable: React.FC<Props> = ({ timeframe, limit = 120, title }) => {
   const { rows } = useBinanceLive(timeframe as TF, {
-    maxSymbols: limit ?? 60,
-    klimit: 600, // enough history for EMA200/RSI
+    maxSymbols: limit,  // controls WS streams & seeding load
+    klimit: 600,        // enough for EMA200
   });
 
-  // Only render up to 'limit' rows if provided
-  const list: Row[] = useMemo(
-    () => (limit ? rows.slice(0, limit) : rows),
-    [rows, limit]
-  );
+  const list: Row[] = useMemo(() => rows.slice(0, limit), [rows, limit]);
 
   return (
     <div className="p-4 overflow-x-auto">
-      {title ? (
-        <h2 className="text-lg font-semibold mb-3">{title} — {timeframe}</h2>
-      ) : (
-        <h2 className="text-lg font-semibold mb-3">Timeframe: {timeframe}</h2>
-      )}
+      <h2 className="text-lg font-semibold mb-3">{title ?? 'Crypto Futures USDT'} — {timeframe}</h2>
 
       <table className="w-full table-auto border-collapse rounded-lg shadow-md">
         <thead>
