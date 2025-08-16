@@ -33,7 +33,7 @@ export default function NSETabs() {
           </div>
 
           {/* Props now match CryptoTable definition */}
-          <CryptoTable timeframe={activeTf} limit={100} pollInterval={30000} />
+<CryptoTable timeframe={activeTf} limit={60} pollInterval={30000} />
         </div>
       ) : (
         <div className="text-center text-gray-600 py-20">📊 NSE Table Coming Soon...</div>
