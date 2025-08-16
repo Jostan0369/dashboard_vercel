@@ -1,94 +1,83 @@
-"use client";
+'use client';
 
-import React, { useEffect, useState } from "react";
+import React, { useMemo } from 'react';
+import { useBinanceLive, TF, Row } from '@/hooks/useBinanceLive';
 
-interface CryptoData {
-  symbol: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  rsi: number;
-  macd: number;
-  ema12: number;
-  ema26: number;
-  ema50: number;
-  ema100: number;
-  ema200: number;
+export type Timeframe = '15m' | '1h' | '4h' | '1d';
+
+type Props = {
+  timeframe: Timeframe;
+  /** max symbols to render (passed to hook as maxSymbols) */
+  limit?: number;
+  /** kept for compatibility; ignored in WS mode */
+  pollInterval?: number;
+  title?: string;
+};
+
+function fmt(x: number | null | undefined, d = 2): string {
+  if (x === null || x === undefined || Number.isNaN(x)) return '-';
+  return Number.isFinite(x) ? x.toFixed(d) : '-';
 }
 
-const CryptoTable: React.FC = () => {
-  const [data, setData] = useState<CryptoData[]>([]);
-  const [loading, setLoading] = useState(true);
+const CryptoTable: React.FC<Props> = ({ timeframe, limit, pollInterval, title }) => {
+  // Map 'limit' to the hook's maxSymbols; default 60 to keep the page fast.
+  const { rows } = useBinanceLive(timeframe as TF, {
+    maxSymbols: limit ?? 60,
+    klimit: 600, // enough history for EMA200/RSI
+  });
 
-  // Fetch all USDT pairs with OHLCV + Indicators
-  const fetchData = async () => {
-    try {
-      const res = await fetch("/api/binance-data");
-      if (!res.ok) throw new Error("Failed to fetch");
-      const json = await res.json();
-      setData(json);
-    } catch (err) {
-      console.error("Error fetching Binance data:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 60000); // refresh every 60s
-    return () => clearInterval(interval);
-  }, []);
+  // Only render up to 'limit' rows if provided
+  const list: Row[] = useMemo(
+    () => (limit ? rows.slice(0, limit) : rows),
+    [rows, limit]
+  );
 
   return (
-    <div className="overflow-x-auto w-full">
-      {loading ? (
-        <p className="text-center py-4">Loading data...</p>
+    <div className="p-4 overflow-x-auto">
+      {title ? (
+        <h2 className="text-lg font-semibold mb-3">{title} — {timeframe}</h2>
       ) : (
-        <table className="min-w-full table-auto border border-gray-600">
-          <thead className="bg-gray-900 text-white">
-            <tr>
-              <th className="px-4 py-2">Symbol</th>
-              <th className="px-4 py-2">Open</th>
-              <th className="px-4 py-2">High</th>
-              <th className="px-4 py-2">Low</th>
-              <th className="px-4 py-2">Close</th>
-              <th className="px-4 py-2">Volume</th>
-              <th className="px-4 py-2">RSI</th>
-              <th className="px-4 py-2">MACD</th>
-              <th className="px-4 py-2">EMA12</th>
-              <th className="px-4 py-2">EMA26</th>
-              <th className="px-4 py-2">EMA50</th>
-              <th className="px-4 py-2">EMA100</th>
-              <th className="px-4 py-2">EMA200</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((coin, i) => (
-              <tr
-                key={i}
-                className="text-center border-t border-gray-600 hover:bg-gray-800"
-              >
-                <td className="px-4 py-2">{coin.symbol}</td>
-                <td className="px-4 py-2">{coin.open.toFixed(4)}</td>
-                <td className="px-4 py-2">{coin.high.toFixed(4)}</td>
-                <td className="px-4 py-2">{coin.low.toFixed(4)}</td>
-                <td className="px-4 py-2">{coin.close.toFixed(4)}</td>
-                <td className="px-4 py-2">{coin.volume.toFixed(2)}</td>
-                <td className="px-4 py-2">{coin.rsi.toFixed(2)}</td>
-                <td className="px-4 py-2">{coin.macd.toFixed(2)}</td>
-                <td className="px-4 py-2">{coin.ema12.toFixed(4)}</td>
-                <td className="px-4 py-2">{coin.ema26.toFixed(4)}</td>
-                <td className="px-4 py-2">{coin.ema50.toFixed(4)}</td>
-                <td className="px-4 py-2">{coin.ema100.toFixed(4)}</td>
-                <td className="px-4 py-2">{coin.ema200.toFixed(4)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <h2 className="text-lg font-semibold mb-3">Timeframe: {timeframe}</h2>
       )}
+
+      <table className="w-full table-auto border-collapse rounded-lg shadow-md">
+        <thead>
+          <tr className="bg-gray-800 text-white text-xs">
+            <th className="p-2 text-left">Symbol</th>
+            <th className="p-2">Open</th>
+            <th className="p-2">High</th>
+            <th className="p-2">Low</th>
+            <th className="p-2">Close</th>
+            <th className="p-2">Volume</th>
+            <th className="p-2">RSI</th>
+            <th className="p-2">MACD</th>
+            <th className="p-2">EMA12</th>
+            <th className="p-2">EMA26</th>
+            <th className="p-2">EMA50</th>
+            <th className="p-2">EMA100</th>
+            <th className="p-2">EMA200</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((r) => (
+            <tr key={r.symbol} className="text-xs text-center border-b hover:bg-gray-50">
+              <td className="p-2 font-semibold text-left">{r.symbol}</td>
+              <td className="p-2">{fmt(r.open, 4)}</td>
+              <td className="p-2">{fmt(r.high, 4)}</td>
+              <td className="p-2">{fmt(r.low, 4)}</td>
+              <td className="p-2">{fmt(r.close, 4)}</td>
+              <td className="p-2">{fmt(r.volume, 2)}</td>
+              <td className="p-2">{fmt(r.rsi14, 2)}</td>
+              <td className="p-2">{fmt(r.macd, 4)}</td>
+              <td className="p-2">{fmt(r.ema12, 4)}</td>
+              <td className="p-2">{fmt(r.ema26, 4)}</td>
+              <td className="p-2">{fmt(r.ema50, 4)}</td>
+              <td className="p-2">{fmt(r.ema100, 4)}</td>
+              <td className="p-2">{fmt(r.ema200, 4)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 };
