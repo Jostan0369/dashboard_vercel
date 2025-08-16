@@ -28,8 +28,8 @@ export type Row = {
 type PerSymbolState = { closes: number[] };
 
 const FAPI = 'https://fapi.binance.com';
-const KLIMIT_DEFAULT = 600; // enough for EMA200
-const MAX_SYMBOLS_DEFAULT = 120; // keep UI fast & WS URL safe
+const KLIMIT_DEFAULT = 600;
+const MAX_SYMBOLS_DEFAULT = 120;
 
 const TF_TO_STREAM: Record<TF, string> = {
   '15m': 'kline_15m',
@@ -85,10 +85,7 @@ async function fetchKlines(symbol: string, tf: TF, limit = KLIMIT_DEFAULT): Prom
   })) as Kline[];
 }
 
-export function useBinanceLive(
-  timeframe: TF,
-  opts?: { maxSymbols?: number; klimit?: number }
-): { rows: Row[] } {
+export function useBinanceLive(timeframe: TF, opts?: { maxSymbols?: number; klimit?: number }): { rows: Row[] } {
   const klimit = opts?.klimit ?? KLIMIT_DEFAULT;
   const maxSymbols = opts?.maxSymbols ?? MAX_SYMBOLS_DEFAULT;
 
@@ -103,11 +100,9 @@ export function useBinanceLive(
 
     (async () => {
       try {
-        // 1) pick symbols
         const syms = await fetchTopUsdtPerpSymbols(maxSymbols);
         if (cancelled || syms.length === 0) return;
 
-        // 2) seed klines
         const seeded = await Promise.all(
           syms.map(async (s) => {
             try {
@@ -120,13 +115,12 @@ export function useBinanceLive(
         );
         if (cancelled) return;
 
-        // 3) build initial rows and states
         const nextRows: Row[] = [];
         const newStates = new Map<string, PerSymbolState>();
 
         for (const { symbol, ks } of seeded) {
           if (!ks.length) continue;
-          const closes = ks.map((k: Kline) => k.close);
+          const closes: number[] = ks.map((k: Kline) => k.close);
           newStates.set(symbol, { closes: [...closes] });
 
           const last = ks[ks.length - 1];
@@ -163,13 +157,13 @@ export function useBinanceLive(
         nextRows.sort((a, b) => a.symbol.localeCompare(b.symbol));
         setRows(nextRows);
 
-        // 4) open WS for live updates
+        // open combined WS for timeframe
         const stream = TF_TO_STREAM[timeframe];
         const streamSyms = Array.from(newStates.keys()).map((s) => s.toLowerCase());
-        if (!streamSyms.length) return;
-
+        if (streamSyms.length === 0) return;
         const streams = streamSyms.map((s) => `${s}@${stream}`).join('/');
-        const ws = new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
+        const wsUrl = `wss://fstream.binance.com/stream?streams=${streams}`;
+        const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onmessage = (ev: MessageEvent) => {
@@ -178,8 +172,8 @@ export function useBinanceLive(
             const k = msg?.data?.k;
             if (!k) return;
 
-            const symbol: string = k.s;     // upper-case
-            const isFinal: boolean = !!k.x; // candle closed
+            const symbol: string = k.s;
+            const isFinal: boolean = !!k.x;
             const open = +k.o;
             const high = +k.h;
             const low = +k.l;
@@ -189,11 +183,7 @@ export function useBinanceLive(
             const st = statesRef.current.get(symbol);
             if (!st) return;
 
-            const partial: Partial<Row> = {
-              symbol,
-              open, high, low, close, volume,
-              ts: Date.now(),
-            };
+            const partial: Partial<Row> = { symbol, open, high, low, close, volume, ts: Date.now() };
 
             if (isFinal) {
               st.closes.push(close);
@@ -205,13 +195,12 @@ export function useBinanceLive(
               partial.ema50 = lastEMA(st.closes, 50);
               partial.ema100 = lastEMA(st.closes, 100);
               partial.ema200 = lastEMA(st.closes, 200);
-              const m = lastMACD(st.closes, 12, 26, 9);
-              partial.macd = m.macd;
-              partial.macdSignal = m.signal;
-              partial.macdHist = m.hist;
+              const mm = lastMACD(st.closes, 12, 26, 9);
+              partial.macd = mm.macd;
+              partial.macdSignal = mm.signal;
+              partial.macdHist = mm.hist;
             }
 
-            // batch updates to avoid re-render storms
             batchRef.current[symbol] = { ...(batchRef.current[symbol] || {}), ...partial };
             if (!scheduledRef.current) {
               scheduledRef.current = true;
@@ -222,11 +211,11 @@ export function useBinanceLive(
                   scheduledRef.current = false;
 
                   setRows((prev) => {
-                    if (!prev.length) return prev;
-                    const idx = new Map(prev.map((r, i) => [r.symbol, i]));
+                    if (prev.length === 0) return prev;
+                    const idxMap = new Map(prev.map((r, i) => [r.symbol, i]));
                     const next = [...prev];
                     for (const [sym, u] of Object.entries(updates)) {
-                      const i = idx.get(sym);
+                      const i = idxMap.get(sym);
                       if (i == null) continue;
                       const base = next[i];
                       next[i] = {
@@ -254,19 +243,18 @@ export function useBinanceLive(
               );
             }
           } catch {
-            // ignore malformed WS frames
+            // ignore parse errors
           }
         };
 
-        ws.onerror = () => { /* optional log */ };
+        ws.onerror = () => { /* optionally log */ };
       } catch {
-        // init errors ignored to keep UI up
+        // init error - keep UI alive
       }
     })();
 
     return () => {
-      cancelled = true;
-      try { wsRef.current?.close(); } catch { /* noop */ }
+      try { wsRef.current?.close(); } catch {}
     };
   }, [timeframe, klimit, maxSymbols]);
 
