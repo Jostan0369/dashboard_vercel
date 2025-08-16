@@ -3,8 +3,7 @@ import { lastRSI, lastEMA, lastMACD } from "../lib/ta";
 
 export type TF = "15m" | "1h" | "4h" | "1d";
 
-// Add 'export' here
-export interface Row { 
+export interface Row {
   symbol: string;
   open: number;
   high: number;
@@ -30,6 +29,11 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
   const [rows, setRows] = useState<Row[]>([]);
   const historyRef = useRef<Map<string, any[]>>(new Map());
 
+  // Add state for seeding, progress, and errors
+  const [seeded, setSeeded] = useState(false);
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [errors, setErrors] = useState<string[]>([]);
+
   // Fetch initial data + seed indicators
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -46,11 +50,14 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
           .map((s: any) => s.symbol);
 
         console.log(`Fetched symbols for table: ${symbols.length}`);
+        setProgress({ done: 0, total: symbols.length });
 
         // Fetch historical klines for each
         for (const sym of symbols) {
+          if (cancelled) break;
           const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${timeframe}&limit=${klimit}`;
           const kRes = await fetch(url);
+          if (!kRes.ok) throw new Error(`Failed to fetch klines for ${sym}`);
           const kData = await kRes.json();
 
           const candles = kData.map((k: any[]) => ({
@@ -63,10 +70,14 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
           }));
 
           historyRef.current.set(sym, candles);
+          setProgress(prev => ({ ...prev, done: prev.done + 1 }));
         }
+
+        if (cancelled) return;
 
         // Seed table with initial indicator values
         updateRows();
+        setSeeded(true);
 
         // Start WebSocket stream
         const streams = symbols.map((s) => `${s.toLowerCase()}@kline_${timeframe}`).join("/");
@@ -99,8 +110,17 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
 
           updateRows();
         };
+
+        ws.onerror = (event) => {
+          console.error("WebSocket error:", event);
+          setErrors(prev => [...prev, "WebSocket connection error"]);
+        };
+
       } catch (err) {
         console.error("Error initializing Binance Live:", err);
+        if (err instanceof Error) {
+          setErrors(prev => [...prev, err.message]);
+        }
       }
     }
 
@@ -139,5 +159,5 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
     };
   }, [timeframe, maxSymbols, klimit]);
 
-  return { rows };
+  return { rows, seeded, progress, errors };
 }
