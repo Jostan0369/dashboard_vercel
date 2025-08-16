@@ -1,6 +1,7 @@
 // lib/ta.ts
+// Pure TypeScript TA helpers (no external deps).
+// Exports: lastEMA, lastRSI, lastMACD
 
-// --- EMA ---
 export function emaSeries(closes: number[], period: number): (number | null)[] {
   const out: (number | null)[] = new Array(closes.length).fill(null);
   if (!closes || closes.length < period) return out;
@@ -9,8 +10,8 @@ export function emaSeries(closes: number[], period: number): (number | null)[] {
   for (let i = 0; i < period; i++) sum += closes[i];
   let prev = sum / period;
   out[period - 1] = prev;
-
   const k = 2 / (period + 1);
+
   for (let i = period; i < closes.length; i++) {
     prev = closes[i] * k + prev * (1 - k);
     out[i] = prev;
@@ -26,7 +27,6 @@ export function lastEMA(closes: number[], period: number): number | null {
   return null;
 }
 
-// --- RSI(14 default) ---
 export function rsiSeries(closes: number[], period = 14): (number | null)[] {
   const out: (number | null)[] = new Array(closes.length).fill(null);
   if (!closes || closes.length < period + 1) return out;
@@ -50,6 +50,7 @@ export function rsiSeries(closes: number[], period = 14): (number | null)[] {
     avgLoss = (avgLoss * (period - 1) + l) / period;
     out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
   }
+
   return out;
 }
 
@@ -61,7 +62,6 @@ export function lastRSI(closes: number[], period = 14): number | null {
   return null;
 }
 
-// --- MACD (12,26,9 default) ---
 export function macdSeries(closes: number[], fast = 12, slow = 26, signal = 9) {
   const fastE = emaSeries(closes, fast);
   const slowE = emaSeries(closes, slow);
@@ -73,20 +73,20 @@ export function macdSeries(closes: number[], fast = 12, slow = 26, signal = 9) {
     }
   }
 
-  // compact MACD values for signal EMA
-  const macdVals: number[] = [];
-  const idx: number[] = [];
+  const macdNums: number[] = [];
+  const macdIdx: number[] = [];
   for (let i = 0; i < macdLine.length; i++) {
     if (macdLine[i] != null) {
-      idx.push(i);
-      macdVals.push(macdLine[i] as number);
+      macdIdx.push(i);
+      macdNums.push(macdLine[i] as number);
     }
   }
 
-  const sigCompact = emaSeries(macdVals, signal);
+  // Signal on compact macdNums -> map back
+  const sigCompact = emaSeries(macdNums, signal);
   const signalLine: (number | null)[] = new Array(closes.length).fill(null);
   for (let j = 0; j < sigCompact.length; j++) {
-    signalLine[idx[j]] = sigCompact[j];
+    signalLine[macdIdx[j]] = sigCompact[j];
   }
 
   const histogram: (number | null)[] = new Array(closes.length).fill(null);
@@ -96,7 +96,7 @@ export function macdSeries(closes: number[], fast = 12, slow = 26, signal = 9) {
     }
   }
 
-  return { macdLine, signalLine, histogram, fastE, slowE };
+  return { macdLine, signalLine, histogram, fastE, slowE: slowE };
 }
 
 export function lastMACD(closes: number[], fast = 12, slow = 26, signal = 9) {
