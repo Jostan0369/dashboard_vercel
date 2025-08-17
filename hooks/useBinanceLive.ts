@@ -80,7 +80,7 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
         setSeeded(true);
 
         // Start WebSocket stream
-        const streams = symbols.map((s) => `${s.toLowerCase()}@kline_${timeframe}`).join("/");
+        const streams = symbols.map((s: string) => `${s.toLowerCase()}@kline_${timeframe}`).join("/");
         ws = new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
         console.log(`Connecting WebSocket for ${symbols.length} Futures USDT pairs...`);
 
