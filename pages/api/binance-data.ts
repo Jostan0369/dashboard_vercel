@@ -31,32 +31,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: "No klines data found for this symbol." });
     }
 
-    const ks: Kline[] = arr.map((k: KlineRow) => ({
-      open: +k[1],
-      high: +k[2],
-      low: +k[3],
-      close: +k[4],
-      volume: +k[5],
-    }));
+    const closes: number[] = arr.map((k: KlineRow) => parseFloat(k[4]));
 
-    const closes: number[] = ks.map((kline: Kline) => kline.close);
+    res.status(200).json({ 
+        success: true,
+        symbol: symbol,
+        timeframe: timeframe,
+        data_points: closes.length,
+        first_10_closes: closes.slice(0, 10),
+        last_10_closes: closes.slice(-10)
+    });
 
-    const last = ks[ks.length - 1];
-
-    const rsi = lastRSI(closes, 14);
-
-    const result = {
-      symbol: symbol,
-      open: last.open,
-      high: last.high,
-      low: last.low,
-      close: last.close,
-      volume: last.volume,
-      rsi14: rsi,
-      data_points: closes.length,
-    };
-
-    res.status(200).json(result);
   } catch (err: any) {
     console.error("API /binance-data error:", err);
     res.status(500).json({ error: "Failed to fetch binance data" });
