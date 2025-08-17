@@ -1,4 +1,3 @@
-// components/CryptoTable.tsx
 'use client';
 
 import React, { useMemo } from 'react';
@@ -20,7 +19,6 @@ function fmt(x: number | null | undefined, d = 2): string {
 
 const CryptoTable: React.FC<Props> = ({ timeframe, limit = 60, title }) => {
   const { rows, seeded, progress, errors } = useBinanceLive(timeframe as TF, { maxSymbols: limit, klimit: 600 });
-
   const list: Row[] = useMemo(() => rows.slice(0, limit), [rows, limit]);
 
   return (
@@ -52,6 +50,8 @@ const CryptoTable: React.FC<Props> = ({ timeframe, limit = 60, title }) => {
               <th className="p-2">Volume</th>
               <th className="p-2">RSI</th>
               <th className="p-2">MACD</th>
+              <th className="p-2">Signal</th>
+              <th className="p-2">Hist</th>
               <th className="p-2">EMA12</th>
               <th className="p-2">EMA26</th>
               <th className="p-2">EMA50</th>
@@ -70,6 +70,8 @@ const CryptoTable: React.FC<Props> = ({ timeframe, limit = 60, title }) => {
                 <td className="p-2 text-right">{fmt(r.volume, 2)}</td>
                 <td className="p-2 text-right">{fmt(r.rsi14, 2)}</td>
                 <td className="p-2 text-right">{fmt(r.macd, 4)}</td>
+                <td className="p-2 text-right">{fmt(r.macdSignal, 4)}</td>
+                <td className="p-2 text-right">{fmt(r.macdHist, 4)}</td>
                 <td className="p-2 text-right">{fmt(r.ema12, 4)}</td>
                 <td className="p-2 text-right">{fmt(r.ema26, 4)}</td>
                 <td className="p-2 text-right">{fmt(r.ema50, 4)}</td>
