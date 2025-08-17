@@ -21,13 +21,22 @@ export function lastRSI(closes: number[], period: number): number {
   return parseFloat((100 - 100 / (1 + rs)).toFixed(2));
 }
 
-export function lastMACD(closes: number[], fast: number, slow: number, signal: number): number {
-  if (closes.length < slow + signal) return NaN;
+export function lastMACD(closes: number[], fast: number, slow: number, signal: number): { macd: number; signal: number; hist: number } {
+  if (closes.length < slow + signal) return { macd: NaN, signal: NaN, hist: NaN };
   const emaFast = emaArray(closes, fast);
   const emaSlow = emaArray(closes, slow);
   const macdLine = emaFast.map((v, i) => v - emaSlow[i]);
   const signalLine = emaArray(macdLine.slice(slow - 1), signal);
-  return parseFloat((macdLine[macdLine.length - 1] - signalLine[signalLine.length - 1]).toFixed(2));
+
+  const lastMacd = macdLine[macdLine.length - 1];
+  const lastSignal = signalLine[signalLine.length - 1];
+  const lastHist = lastMacd - lastSignal;
+
+  return {
+    macd: parseFloat(lastMacd.toFixed(2)),
+    signal: parseFloat(lastSignal.toFixed(2)),
+    hist: parseFloat(lastHist.toFixed(2)),
+  };
 }
 
 function emaArray(values: number[], period: number): number[] {
