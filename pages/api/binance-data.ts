@@ -55,7 +55,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         try {
           const url = `${FAPI}/fapi/v1/klines?symbol=${encodeURIComponent(sym.toUpperCase())}&interval=${timeframe}&limit=${klimit}`;
           const kResp = await fetch(url);
-          if (!kResp.ok) throw new Error(`Failed to fetch klines for ${sym}: ${kResp.statusText}`);
+          // Check for a non-200 status code and throw to be caught by the inner try/catch
+          if (!kResp.ok) {
+             throw new Error(`API returned status ${kResp.status}`);
+          }
           const arr = await kResp.json();
 
           if (!Array.isArray(arr) || arr.length === 0) return null;
@@ -73,13 +76,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const closes: number[] = ks.map((kline: Kline) => kline.close);
           const last = ks[ks.length - 1];
 
-          const rsi = lastRSI(closes, 14);
-          const ema12 = lastEMA(closes, 12);
-          const ema26 = lastEMA(closes, 26);
-          const ema50 = lastEMA(closes, 50);
-          const ema100 = lastEMA(closes, 100);
-          const ema200 = lastEMA(closes, 200);
-          const macdVals = lastMACD(closes, 12, 26, 9);
+          // Calculate RSI14
+          const rsi = closes.length >= 15 ? lastRSI(closes, 14) : NaN;
+          
+          // You can comment out all other indicators for now as a test
+          const ema12 = NaN;
+          const ema26 = NaN;
+          const ema50 = NaN;
+          const ema100 = NaN;
+          const ema200 = NaN;
+          const macdVals = { macd: NaN, signal: NaN, hist: NaN };
 
           return {
             symbol: sym.toUpperCase(),
@@ -101,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           };
         } catch (err) {
           console.error(`Error processing data for ${sym}:`, err);
-          return null;
+          return null; // Return null to prevent Promise.all from failing
         }
       })
     );
