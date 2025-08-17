@@ -92,6 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             close: last.close,
             volume: last.volume,
             rsi14: rsi,
+            // These properties are correct assuming lastMACD returns an object
             macd: macdVals.macd,
             ema12,
             ema26,
