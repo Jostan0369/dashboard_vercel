@@ -1,9 +1,8 @@
 import { useEffect, useState, useRef } from "react";
-import { lastRSI, lastEMA, lastMACD } from "@/lib/ta"; // Assuming the path is correct
+import { lastRSI, lastEMA, lastMACD } from "@/lib/ta";
 
 export type TF = "15m" | "1h" | "4h" | "1d";
 
-// Corrected Row interface
 export interface Row {
   symbol: string;
   open: number;
@@ -123,11 +122,18 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
     function updateRows() {
       const newRows: Row[] = [];
       historyRef.current.forEach((candles, symbol) => {
-        if (!candles || candles.length < 200) return;
-
+        // Remove the single length check here
         const closes = candles.map((c) => c.close);
         const last = candles[candles.length - 1];
-        const macdValues = lastMACD(closes, 12, 26, 9); // This now returns an object
+        
+        // Calculate indicators only if sufficient data is available
+        const rsiVal = closes.length > 14 ? lastRSI(closes, 14) : NaN;
+        const macdValues = closes.length > 26 ? lastMACD(closes, 12, 26, 9) : { macd: NaN, signal: NaN, hist: NaN };
+        const ema12 = closes.length > 12 ? lastEMA(closes, 12) : NaN;
+        const ema26 = closes.length > 26 ? lastEMA(closes, 26) : NaN;
+        const ema50 = closes.length > 50 ? lastEMA(closes, 50) : NaN;
+        const ema100 = closes.length > 100 ? lastEMA(closes, 100) : NaN;
+        const ema200 = closes.length > 200 ? lastEMA(closes, 200) : NaN;
 
         newRows.push({
           symbol,
@@ -136,13 +142,13 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
           low: last.low,
           close: last.close,
           volume: last.volume,
-          rsi14: lastRSI(closes, 14),
+          rsi14: rsiVal,
           macd: macdValues.macd,
-          ema12: lastEMA(closes, 12),
-          ema26: lastEMA(closes, 26),
-          ema50: lastEMA(closes, 50),
-          ema100: lastEMA(closes, 100),
-          ema200: lastEMA(closes, 200),
+          ema12,
+          ema26,
+          ema50,
+          ema100,
+          ema200,
           macdSignal: macdValues.signal,
           macdHist: macdValues.hist,
         });
