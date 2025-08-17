@@ -27,7 +27,7 @@ interface Options {
 }
 
 export function useBinanceLive(timeframe: TF, opts: Options = {}) {
-  const { maxSymbols = 60, klimit = 600 } = opts; // Ensure klimit is sufficient
+  const { maxSymbols = 60, klimit = 600 } = opts;
   const [rows, setRows] = useState<Row[]>([]);
   const historyRef = useRef<Map<string, any[]>>(new Map());
 
@@ -124,8 +124,8 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
       historyRef.current.forEach((candles, symbol) => {
         const closes = candles.map((c) => c.close);
         const last = candles[candles.length - 1];
-        
-        // Conditional calculations for each indicator
+
+        // Conditional calculations based on available data with reduced periods
         const rsiVal = closes.length >= 14 ? lastRSI(closes, 14) : NaN;
         const macdValues = closes.length >= 35 ? lastMACD(closes, 12, 26, 9) : { macd: NaN, signal: NaN, hist: NaN };
         const ema12 = closes.length >= 12 ? lastEMA(closes, 12) : NaN;
