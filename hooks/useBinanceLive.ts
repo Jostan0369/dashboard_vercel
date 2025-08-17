@@ -27,7 +27,7 @@ interface Options {
 }
 
 export function useBinanceLive(timeframe: TF, opts: Options = {}) {
-  const { maxSymbols = 60, klimit = 300 } = opts;
+  const { maxSymbols = 60, klimit = 600 } = opts; // Ensure klimit is sufficient
   const [rows, setRows] = useState<Row[]>([]);
   const historyRef = useRef<Map<string, any[]>>(new Map());
 
@@ -122,18 +122,17 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
     function updateRows() {
       const newRows: Row[] = [];
       historyRef.current.forEach((candles, symbol) => {
-        // Remove the single length check here
         const closes = candles.map((c) => c.close);
         const last = candles[candles.length - 1];
         
-        // Calculate indicators only if sufficient data is available
-        const rsiVal = closes.length > 14 ? lastRSI(closes, 14) : NaN;
-        const macdValues = closes.length > 26 ? lastMACD(closes, 12, 26, 9) : { macd: NaN, signal: NaN, hist: NaN };
-        const ema12 = closes.length > 12 ? lastEMA(closes, 12) : NaN;
-        const ema26 = closes.length > 26 ? lastEMA(closes, 26) : NaN;
-        const ema50 = closes.length > 50 ? lastEMA(closes, 50) : NaN;
-        const ema100 = closes.length > 100 ? lastEMA(closes, 100) : NaN;
-        const ema200 = closes.length > 200 ? lastEMA(closes, 200) : NaN;
+        // Conditional calculations for each indicator
+        const rsiVal = closes.length >= 14 ? lastRSI(closes, 14) : NaN;
+        const macdValues = closes.length >= 35 ? lastMACD(closes, 12, 26, 9) : { macd: NaN, signal: NaN, hist: NaN };
+        const ema12 = closes.length >= 12 ? lastEMA(closes, 12) : NaN;
+        const ema26 = closes.length >= 26 ? lastEMA(closes, 26) : NaN;
+        const ema50 = closes.length >= 50 ? lastEMA(closes, 50) : NaN;
+        const ema100 = closes.length >= 100 ? lastEMA(closes, 100) : NaN;
+        const ema200 = closes.length >= 200 ? lastEMA(closes, 200) : NaN;
 
         newRows.push({
           symbol,
