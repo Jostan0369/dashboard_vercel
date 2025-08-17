@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from "react";
-import { lastRSI, lastEMA, lastMACD } from "../lib/ta";
+import { lastRSI, lastEMA, lastMACD } from "@/lib/ta"; // Assuming the path is correct
 
 export type TF = "15m" | "1h" | "4h" | "1d";
 
+// Corrected Row interface
 export interface Row {
   symbol: string;
   open: number;
@@ -17,6 +18,8 @@ export interface Row {
   ema50: number;
   ema100: number;
   ema200: number;
+  macdSignal: number;
+  macdHist: number;
 }
 
 interface Options {
@@ -29,19 +32,16 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
   const [rows, setRows] = useState<Row[]>([]);
   const historyRef = useRef<Map<string, any[]>>(new Map());
 
-  // Add state for seeding, progress, and errors
   const [seeded, setSeeded] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [errors, setErrors] = useState<string[]>([]);
 
-  // Fetch initial data + seed indicators
   useEffect(() => {
     let ws: WebSocket | null = null;
     let cancelled = false;
 
     async function init() {
       try {
-        // Get all USDT perpetual futures symbols
         const symbolsRes = await fetch("https://fapi.binance.com/fapi/v1/exchangeInfo");
         const symbolsJson = await symbolsRes.json();
         const symbols = symbolsJson.symbols
@@ -52,7 +52,6 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
         console.log(`Fetched symbols for table: ${symbols.length}`);
         setProgress({ done: 0, total: symbols.length });
 
-        // Fetch historical klines for each
         for (const sym of symbols) {
           if (cancelled) break;
           const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${timeframe}&limit=${klimit}`;
@@ -74,12 +73,10 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
         }
 
         if (cancelled) return;
-
-        // Seed table with initial indicator values
+        
         updateRows();
         setSeeded(true);
 
-        // Start WebSocket stream
         const streams = symbols.map((s: string) => `${s.toLowerCase()}@kline_${timeframe}`).join("/");
         ws = new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
         console.log(`Connecting WebSocket for ${symbols.length} Futures USDT pairs...`);
@@ -107,7 +104,6 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
             if (arr.length > klimit) arr.shift();
           }
           historyRef.current.set(sym, arr);
-
           updateRows();
         };
 
@@ -127,10 +123,11 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
     function updateRows() {
       const newRows: Row[] = [];
       historyRef.current.forEach((candles, symbol) => {
-        if (!candles || candles.length < 200) return; // Need enough data for EMA200
+        if (!candles || candles.length < 200) return;
 
         const closes = candles.map((c) => c.close);
         const last = candles[candles.length - 1];
+        const macdValues = lastMACD(closes, 12, 26, 9); // This now returns an object
 
         newRows.push({
           symbol,
@@ -140,12 +137,14 @@ export function useBinanceLive(timeframe: TF, opts: Options = {}) {
           close: last.close,
           volume: last.volume,
           rsi14: lastRSI(closes, 14),
-          macd: lastMACD(closes, 12, 26, 9),
+          macd: macdValues.macd,
           ema12: lastEMA(closes, 12),
           ema26: lastEMA(closes, 26),
           ema50: lastEMA(closes, 50),
           ema100: lastEMA(closes, 100),
           ema200: lastEMA(closes, 200),
+          macdSignal: macdValues.signal,
+          macdHist: macdValues.hist,
         });
       });
       setRows(newRows);
