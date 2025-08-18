@@ -1,81 +1,139 @@
 // components/CryptoTable.tsx
-'use client';
+"use client";
 
-import React, { useMemo } from 'react';
-import { useBinanceLive, TF } from '@/hooks/useBinanceLive';
+import React, { useEffect, useState } from "react";
+import { calculateRSI, calculateEMA, calculateMACD } from "@/utils/indicators";
 
-type Timeframe = TF;
+type Kline = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
 
-interface Props {
-  timeframe: Timeframe;
-  limit?: number;   // number of symbols to show
-  title?: string;
-}
+type RowData = {
+  symbol: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  rsi: number;
+  ema12: number;
+  ema26: number;
+  ema50: number;
+  ema100: number;
+  ema200: number;
+  macd: number;
+};
 
-function fmt(x: number | null | undefined, d = 2) {
-  if (x === null || x === undefined || Number.isNaN(x)) return '-';
-  return Number.isFinite(x) ? x.toFixed(d) : '-';
-}
+const CryptoTable = () => {
+  const [rows, setRows] = useState<RowData[]>([]);
 
-const CryptoTable: React.FC<Props> = ({ timeframe, limit = 80, title }) => {
-  const { rows, seeded, progress, errors } = useBinanceLive(timeframe, { maxSymbols: limit, klimit: 600 });
-  const list = useMemo(() => rows.slice(0, limit), [rows, limit]);
+  useEffect(() => {
+    const ws = new WebSocket(
+      "wss://fstream.binance.com/ws/!miniTicker@arr"
+    );
+
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        const updates: RowData[] = [];
+
+        for (const ticker of data) {
+          const symbol = ticker.s;
+
+          // Fetch recent klines for indicator calc
+          const res = await fetch(
+            `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=15m&limit=200`
+          );
+          if (!res.ok) continue;
+          const klinesRaw = await res.json();
+
+          const klines: Kline[] = klinesRaw.map((k: any) => ({
+            time: k[0],
+            open: parseFloat(k[1]),
+            high: parseFloat(k[2]),
+            low: parseFloat(k[3]),
+            close: parseFloat(k[4]),
+            volume: parseFloat(k[5]),
+          }));
+
+          const closes = klines.map((k) => k.close);
+
+          // Indicators
+          const rsi = calculateRSI(closes, 14);
+          const ema12 = calculateEMA(closes, 12);
+          const ema26 = calculateEMA(closes, 26);
+          const ema50 = calculateEMA(closes, 50);
+          const ema100 = calculateEMA(closes, 100);
+          const ema200 = calculateEMA(closes, 200);
+          const macd = calculateMACD(closes, 12, 26, 9);
+
+          updates.push({
+            symbol,
+            open: klines[klines.length - 1].open,
+            high: klines[klines.length - 1].high,
+            low: klines[klines.length - 1].low,
+            close: klines[klines.length - 1].close,
+            rsi,
+            ema12,
+            ema26,
+            ema50,
+            ema100,
+            ema200,
+            macd,
+          });
+        }
+
+        setRows(updates);
+      } catch (err) {
+        console.error("Error:", err);
+      }
+    };
+
+    return () => ws.close();
+  }, []);
 
   return (
-    <div className="p-4 overflow-x-auto">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-lg font-semibold">
-          {title ?? 'Binance Futures USDT Perpetual'} — {timeframe}
-        </h2>
-        <div className="text-sm text-gray-500">{seeded ? 'Seeded' : `Seeding ${progress.done}/${progress.total}`}</div>
-      </div>
-
-      {errors.length > 0 && (
-        <div className="mb-2 text-xs text-red-600">Some errors occurred — open console for details.</div>
-      )}
-
-      {!seeded ? (
-        <div className="text-center py-8 text-gray-500">⏳ Loading historical candles & calculating indicators…</div>
-      ) : (
-        <table className="w-full table-auto border-collapse rounded-lg shadow-md text-xs">
-          <thead>
-            <tr className="bg-gray-800 text-white">
-              <th className="p-2 text-left">Symbol</th>
-              <th className="p-2">Open</th>
-              <th className="p-2">High</th>
-              <th className="p-2">Low</th>
-              <th className="p-2">Close</th>
-              <th className="p-2">Volume</th>
-              <th className="p-2">RSI</th>
-              <th className="p-2">MACD</th>
-              <th className="p-2">EMA12</th>
-              <th className="p-2">EMA26</th>
-              <th className="p-2">EMA50</th>
-              <th className="p-2">EMA100</th>
-              <th className="p-2">EMA200</th>
+    <div className="overflow-x-auto p-4">
+      <table className="min-w-full border-collapse border border-gray-300 text-sm text-white">
+        <thead>
+          <tr className="bg-gray-800">
+            <th className="border px-2 py-1">Symbol</th>
+            <th className="border px-2 py-1">Open</th>
+            <th className="border px-2 py-1">High</th>
+            <th className="border px-2 py-1">Low</th>
+            <th className="border px-2 py-1">Close</th>
+            <th className="border px-2 py-1">RSI</th>
+            <th className="border px-2 py-1">EMA12</th>
+            <th className="border px-2 py-1">EMA26</th>
+            <th className="border px-2 py-1">EMA50</th>
+            <th className="border px-2 py-1">EMA100</th>
+            <th className="border px-2 py-1">EMA200</th>
+            <th className="border px-2 py-1">MACD</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.symbol} className="text-center border">
+              <td className="border px-2 py-1">{row.symbol}</td>
+              <td className="border px-2 py-1">{row.open.toFixed(4)}</td>
+              <td className="border px-2 py-1">{row.high.toFixed(4)}</td>
+              <td className="border px-2 py-1">{row.low.toFixed(4)}</td>
+              <td className="border px-2 py-1">{row.close.toFixed(4)}</td>
+              <td className="border px-2 py-1">{row.rsi.toFixed(2)}</td>
+              <td className="border px-2 py-1">{row.ema12.toFixed(2)}</td>
+              <td className="border px-2 py-1">{row.ema26.toFixed(2)}</td>
+              <td className="border px-2 py-1">{row.ema50.toFixed(2)}</td>
+              <td className="border px-2 py-1">{row.ema100.toFixed(2)}</td>
+              <td className="border px-2 py-1">{row.ema200.toFixed(2)}</td>
+              <td className="border px-2 py-1">{row.macd.toFixed(2)}</td>
             </tr>
-          </thead>
-          <tbody>
-            {list.map((r) => (
-              <tr key={r.symbol} className="border-b hover:bg-gray-50">
-                <td className="p-2 font-semibold">{r.symbol}</td>
-                <td className="p-2 text-right">{fmt(r.open, 4)}</td>
-                <td className="p-2 text-right">{fmt(r.high, 4)}</td>
-                <td className="p-2 text-right">{fmt(r.low, 4)}</td>
-                <td className="p-2 text-right">{fmt(r.close, 4)}</td>
-                <td className="p-2 text-right">{fmt(r.volume, 2)}</td>
-                <td className="p-2 text-right">{fmt(r.rsi14, 2)}</td>
-                <td className="p-2 text-right">{fmt(r.macd, 4)}</td>
-                <td className="p-2 text-right">{fmt(r.ema12, 4)}</td>
-                <td className="p-2 text-right">{fmt(r.ema26, 4)}</td>
-                <td className="p-2 text-right">{fmt(r.ema50, 4)}</td>
-                <td className="p-2 text-right">{fmt(r.ema100, 4)}</td>
-                <td className="p-2 text-right">{fmt(r.ema200, 4)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 };
