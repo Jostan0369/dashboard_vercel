@@ -1,13 +1,19 @@
-import { NextResponse } from 'next/server';
-export const runtime = 'nodejs';
-export const preferredRegion = ['bom1','sin1','hkg1']; // avoid blocked regions
+import type { NextApiRequest, NextApiResponse } from "next";
 
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const symbol = searchParams.get('symbol') ?? 'BTCUSDT';
-  const interval = searchParams.get('interval') ?? '15m';
-  const limit = searchParams.get('limit') ?? '600';
-  const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-  const r = await fetch(url);
-  return new NextResponse(await r.text(), { status: r.status, headers: { 'content-type': r.headers.get('content-type') || 'application/json' }});
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  try {
+    const { symbol, interval } = req.query;
+
+    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=200`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Binance error: ${response.status}` });
+    }
+
+    const data = await response.json();
+    res.status(200).json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 }
