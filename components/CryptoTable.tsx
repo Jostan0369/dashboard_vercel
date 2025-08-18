@@ -4,11 +4,11 @@
 import React, { useMemo } from 'react';
 import { useBinanceLive, TF } from '@/hooks/useBinanceLive';
 
-type Timeframe = '15m' | '1h' | '4h' | '1d';
+type Timeframe = TF;
 
 interface Props {
   timeframe: Timeframe;
-  limit?: number;
+  limit?: number;   // number of symbols to show
   title?: string;
 }
 
@@ -17,14 +17,16 @@ function fmt(x: number | null | undefined, d = 2) {
   return Number.isFinite(x) ? x.toFixed(d) : '-';
 }
 
-const CryptoTable: React.FC<Props> = ({ timeframe, limit = 60, title }) => {
-  const { rows, seeded, progress, errors } = useBinanceLive(timeframe as TF, { maxSymbols: limit, klimit: 600 });
+const CryptoTable: React.FC<Props> = ({ timeframe, limit = 80, title }) => {
+  const { rows, seeded, progress, errors } = useBinanceLive(timeframe, { maxSymbols: limit, klimit: 600 });
   const list = useMemo(() => rows.slice(0, limit), [rows, limit]);
 
   return (
     <div className="p-4 overflow-x-auto">
       <div className="flex items-center justify-between mb-2">
-        <h2 className="text-lg font-semibold">{title ?? 'USDT Perp (Binance Futures)'} — {timeframe}</h2>
+        <h2 className="text-lg font-semibold">
+          {title ?? 'Binance Futures USDT Perpetual'} — {timeframe}
+        </h2>
         <div className="text-sm text-gray-500">{seeded ? 'Seeded' : `Seeding ${progress.done}/${progress.total}`}</div>
       </div>
 
