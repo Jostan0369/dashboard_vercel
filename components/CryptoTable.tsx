@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { calculateRSI, calculateEMA, calculateMACD } from "@/utils/indicators";
+import { calculateRSI, calculateEMA, calculateMACD } from "@/lib/indicators";
 
 type Kline = {
   time: number;
