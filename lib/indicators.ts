@@ -1,59 +1,31 @@
 // lib/indicator.ts
 
-// Simple Moving Average / EMA
-export function calculateEMA(data: number[], period: number): number[] {
+export function calculateEMA(data: number[], period: number): number {
+  if (data.length < period) return NaN;
   const k = 2 / (period + 1);
-  let emaArray: number[] = [];
-  let prevEma = data[0];
-
-  data.forEach((price, i) => {
-    if (i === 0) {
-      emaArray.push(price);
-    } else {
-      const ema = price * k + prevEma * (1 - k);
-      emaArray.push(ema);
-      prevEma = ema;
-    }
-  });
-
-  return emaArray;
+  return data.reduce((prev, curr, i) => {
+    if (i === 0) return curr;
+    return curr * k + prev * (1 - k);
+  }, data[0]);
 }
 
-// RSI
-export function calculateRSI(data: number[], period: number = 14): number[] {
-  let gains: number[] = [];
-  let losses: number[] = [];
-  let rsiArray: number[] = [];
-
-  for (let i = 1; i < data.length; i++) {
+export function calculateRSI(data: number[], period: number): number {
+  if (data.length < period) return NaN;
+  let gains = 0, losses = 0;
+  for (let i = 1; i < period; i++) {
     const diff = data[i] - data[i - 1];
-    gains.push(diff > 0 ? diff : 0);
-    losses.push(diff < 0 ? Math.abs(diff) : 0);
-
-    if (i >= period) {
-      const avgGain = gains.slice(i - period, i).reduce((a, b) => a + b, 0) / period;
-      const avgLoss = losses.slice(i - period, i).reduce((a, b) => a + b, 0) / period;
-
-      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-      const rsi = 100 - 100 / (1 + rs);
-
-      rsiArray.push(rsi);
-    } else {
-      rsiArray.push(50); // neutral default
-    }
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
   }
-
-  return rsiArray;
+  const rs = gains / (losses || 1);
+  return 100 - 100 / (1 + rs);
 }
 
-// MACD
-export function calculateMACD(data: number[], shortPeriod = 12, longPeriod = 26, signalPeriod = 9) {
-  const shortEMA = calculateEMA(data, shortPeriod);
-  const longEMA = calculateEMA(data, longPeriod);
-
-  const macdLine = shortEMA.map((val, i) => val - longEMA[i]);
-  const signalLine = calculateEMA(macdLine, signalPeriod);
-  const histogram = macdLine.map((val, i) => val - signalLine[i]);
-
-  return { macdLine, signalLine, histogram };
+export function calculateMACD(data: number[]): { macd: number; signal: number; histogram: number } {
+  if (data.length < 26) return { macd: NaN, signal: NaN, histogram: NaN };
+  const ema12 = calculateEMA(data, 12);
+  const ema26 = calculateEMA(data, 26);
+  const macd = ema12 - ema26;
+  const signal = calculateEMA([macd], 9);
+  return { macd, signal, histogram: macd - signal };
 }
